@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Nour Local Video Studio"
+description = "A local-first Nour video workspace with a desktop-style editor and companion operations console for managing projects, releases, and activity."
+version = "1.0.0"
+id = "artifacts/nour-studio"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25679
+
+[services.development]
+run = "pnpm --filter @workspace/nour-studio run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/nour-studio", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/nour-studio/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25679"
+BASE_PATH = "/"
