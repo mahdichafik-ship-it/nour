@@ -63,7 +63,7 @@ pnpm install
 echo "Generating release icon assets..."
 (
   cd "$artifact_dir"
-  cargo tauri icon ./src-tauri/icons/nour-app-icon.svg
+  node scripts/generate-desktop-icons.mjs
 )
 
 echo "Building Nour's production interface..."

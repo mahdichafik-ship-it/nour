@@ -36,5 +36,33 @@ fn ensure_development_icon() {
 
 fn main() {
     ensure_development_icon();
+    // Tauri embeds PNG bytes without reducing 16-bit channels. Reject these
+    // at build time rather than aborting when the native window is created.
+    for path in [
+        "icons/icon.png",
+        "icons/32x32.png",
+        "icons/128x128.png",
+        "icons/128x128@2x.png",
+    ] {
+        println!("cargo:rerun-if-changed={path}");
+        let file = fs::File::open(path).expect("open app icon");
+        let decoder = png::Decoder::new(file);
+        let mut reader = decoder.read_info().expect("decode app icon header");
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut pixels).expect("decode app icon pixels");
+        assert!(
+            info.color_type == png::ColorType::Rgba
+                && info.bit_depth == png::BitDepth::Eight
+                && info.buffer_size() == info.width as usize * info.height as usize * 4,
+            "{path}: Tauri requires 8-bit RGBA pixels; normalize the desktop icons before building"
+        );
+    }
+    println!("cargo:rerun-if-changed=icons/icon.icns");
+    let icns = fs::read("icons/icon.icns").expect("read macOS icon");
+    assert!(
+        icns.len() >= 8 && &icns[..4] == b"icns"
+            && u32::from_be_bytes(icns[4..8].try_into().unwrap()) as usize == icns.len(),
+        "icons/icon.icns must be a genuine ICNS container, not a renamed PNG"
+    );
     tauri_build::build()
 }

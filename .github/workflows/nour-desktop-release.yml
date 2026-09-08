@@ -125,6 +125,10 @@ jobs:
           TAURI_UPDATER_PUBLIC_KEY: ${{ secrets.TAURI_UPDATER_PUBLIC_KEY }}
         run: pnpm run desktop:prepare-release
 
+      - name: Generate valid native icons from the source artwork
+        working-directory: artifacts/nour-studio
+        run: node scripts/generate-desktop-icons.mjs
+
       - name: Build, sign, notarize, and bundle
         working-directory: artifacts/nour-studio
         env:
@@ -159,12 +163,34 @@ jobs:
           dmg="$RUNNER_TEMP/nour-release/Nour-${version}-${ARCHITECTURE}.dmg"
           mount_dir="$(mktemp -d)"
           hdiutil attach "$dmg" -readonly -nobrowse -mountpoint "$mount_dir"
+          trap 'hdiutil detach "$mount_dir" >/dev/null 2>&1 || true' EXIT
           app_path="$(find "$mount_dir" -maxdepth 1 -name '*.app' -print -quit)"
           test -n "$app_path"
           codesign --verify --deep --strict --verbose=2 "$app_path"
           spctl --assess --type execute --verbose=2 "$app_path"
           xcrun stapler validate "$app_path"
+          # Signing checks cannot detect application startup panics.
+          # Run the actual bundled executable on each native Mac runner.
+          startup_log="$RUNNER_TEMP/nour-startup-${ARCHITECTURE}.log"
+          "$app_path/Contents/MacOS/nour-desktop" >"$startup_log" 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; hdiutil detach "$mount_dir" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 20); do
+            sleep 1
+            if ! kill -0 "$app_pid" 2>/dev/null; then
+              cat "$startup_log"
+              echo "Nour exited during the native startup smoke test."
+              exit 1
+            fi
+          done
+          if grep -Eiq 'panicked at|Failed to setup app|invalid icon' "$startup_log"; then
+            cat "$startup_log"
+            exit 1
+          fi
+          kill "$app_pid"
+          wait "$app_pid" 2>/dev/null || true
           hdiutil detach "$mount_dir"
+          trap - EXIT
 
       - name: Upload verified architecture
         uses: actions/upload-artifact@v4
