@@ -6,6 +6,7 @@ import { Library } from './Library';
 import { PlayerArea } from './PlayerArea';
 import { Inspector } from './Inspector';
 import { Timeline } from './Timeline';
+import DesktopUpdatePrompt from './DesktopUpdatePrompt';
 import './editor.css';
 
 function NourMark() {
@@ -133,6 +134,7 @@ export default function EditorWorkspace() {
       </div>
       
       <Timeline editor={editor} />
+      {isNative && <DesktopUpdatePrompt />}
     </div>
   );
 }
