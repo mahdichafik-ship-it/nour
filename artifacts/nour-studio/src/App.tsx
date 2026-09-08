@@ -285,10 +285,10 @@ function EditorPage() {
         </div>
       </header>
       {!window.__TAURI__ && <section className="mac-download-banner" aria-label="Download Nour for Mac">
-        <div className="mac-download-copy"><strong>Get Nour for Mac <span>v0.1.0</span></strong><p>Download the DMG, open it, then drag Nour into Applications. macOS 12 or later.</p></div>
+        <div className="mac-download-copy"><strong>Get Nour for Mac <span>v0.1.1 · Startup fix</span></strong><p>Open the DMG and drag Nour into Applications. Choose Replace if updating. macOS 12 or later.</p></div>
         <div className="mac-download-links">
-          <a href="https://github.com/mahdichafik-ship-it/nour/releases/download/v0.1.0/Nour-0.1.0-arm64.dmg" data-testid="download-mac-arm64"><Download size={15} /> Apple Silicon <span>M-series</span></a>
-          <a href="https://github.com/mahdichafik-ship-it/nour/releases/download/v0.1.0/Nour-0.1.0-x64.dmg" data-testid="download-mac-x64"><Download size={15} /> Intel Mac</a>
+          <a href="https://github.com/mahdichafik-ship-it/nour/releases/download/v0.1.1/Nour-0.1.1-arm64.dmg" data-testid="download-mac-arm64"><Download size={15} /> Apple Silicon <span>M-series</span></a>
+          <a href="https://github.com/mahdichafik-ship-it/nour/releases/download/v0.1.1/Nour-0.1.1-x64.dmg" data-testid="download-mac-x64"><Download size={15} /> Intel Mac</a>
         </div>
         <p className="mac-download-help">Not sure? Apple menu → About This Mac → Chip or Processor.</p>
       </section>}
