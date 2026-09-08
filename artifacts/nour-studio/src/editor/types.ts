@@ -1,5 +1,19 @@
 export type MediaKind = 'video' | 'audio' | 'image';
 export type Track = 'video' | 'audio';
+export type ProjectType = 'documentary' | 'wedding' | 'interview' | 'social' | 'custom';
+export type AspectRatio = '16:9' | '9:16' | '1:1' | '4:3';
+export type ProjectSettings = {
+  type: ProjectType;
+  aspectRatio: AspectRatio;
+  resolution: '3840x2160' | '1920x1080' | '1080x1920' | '1080x1080' | '1280x720';
+  frameRate: 24 | 25 | 30 | 60;
+};
+export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
+  type: 'custom',
+  aspectRatio: '16:9',
+  resolution: '1920x1080',
+  frameRate: 30,
+};
 export type Adjustments = {
   exposure: number;
   contrast: number;
@@ -32,6 +46,9 @@ export type NativeMediaFile = { path: string; name: string; size: number };
 export type EditorController = {
   projectName: string;
   setProjectName: (name: string) => void;
+  projectSettings: ProjectSettings;
+  hasProject: boolean;
+  createProject: (name: string, settings: ProjectSettings) => void;
   assets: MediaAsset[];
   clips: TimelineClip[];
   selectedAssetId: string | null;
@@ -75,7 +92,6 @@ export type EditorController = {
   reportError: (message: string) => void;
   clearError: () => void;
   saveStatus: 'loading' | 'saving' | 'saved' | 'error';
-  newProject: () => void;
   exportProject: () => void;
 };
 

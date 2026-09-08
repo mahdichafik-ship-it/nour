@@ -1,4 +1,4 @@
-import React, { useState, DragEvent } from 'react';
+import React, { useEffect, useState, DragEvent } from 'react';
 import { Link } from 'wouter';
 import { useEditorEngine } from './use-editor-engine';
 import { Plus, ArrowUpRight, FileDown, AlertTriangle, PlusSquare } from 'lucide-react';
@@ -7,6 +7,7 @@ import { PlayerArea } from './PlayerArea';
 import { Inspector } from './Inspector';
 import { Timeline } from './Timeline';
 import DesktopUpdatePrompt from './DesktopUpdatePrompt';
+import { ProjectCreationDialog } from './ProjectCreationDialog';
 import './editor.css';
 
 function NourMark() {
@@ -22,6 +23,11 @@ export default function EditorWorkspace() {
   const isNative = !!(window as any).__TAURI__;
 
   const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
+
+  useEffect(() => {
+    if (editor.saveStatus === 'saved' && !editor.hasProject) setIsProjectDialogOpen(true);
+  }, [editor.hasProject, editor.saveStatus]);
 
   const handleDragOver = (e: DragEvent) => {
     e.preventDefault();
@@ -101,20 +107,19 @@ export default function EditorWorkspace() {
           </Link>
         </div>
         <div className="topbar-center">
-          <input 
+          <input
             className="project-input" 
             value={editor.projectName} 
             onChange={(e) => editor.setProjectName(e.target.value)}
             aria-label="Project Name"
           />
+          <button className="project-settings-summary" onClick={() => setIsProjectDialogOpen(true)} title="Edit project settings">
+            {editor.projectSettings.type} · {editor.projectSettings.aspectRatio} · {editor.projectSettings.frameRate} fps
+          </button>
           <span className="save-status">{editor.saveStatus}</span>
         </div>
         <div className="topbar-right">
-          <button className="new-project-btn" onClick={() => {
-            if (window.confirm('Start a new project? All unsaved changes will be lost.')) {
-              editor.newProject();
-            }
-          }}><Plus size={14} /> New project</button>
+          <button className="new-project-btn" onClick={() => setIsProjectDialogOpen(true)}><Plus size={14} /> New project</button>
           <Link href="/console/" className="console-link"><ArrowUpRight size={14} /> Console</Link>
           <button 
             className="export-btn" 
@@ -135,6 +140,18 @@ export default function EditorWorkspace() {
       
       <Timeline editor={editor} />
       {isNative && <DesktopUpdatePrompt />}
+      {isProjectDialogOpen && (
+        <ProjectCreationDialog
+          initialName={editor.projectName}
+          initialSettings={editor.projectSettings}
+          canCancel={editor.hasProject}
+          onClose={() => setIsProjectDialogOpen(false)}
+          onCreate={(name, settings) => {
+            editor.createProject(name, settings);
+            setIsProjectDialogOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
