@@ -59,12 +59,12 @@ export default function EditorWorkspace() {
       {!isNative && (
         <section className="mac-download-banner" aria-label="Download Nour for Mac">
           <div className="mac-download-copy">
-            <strong>Get Nour for Mac <span>v0.1.3</span></strong>
-            <p>Smoother video playback and restored editor controls.</p>
+            <strong>Get Nour for Mac <span>v0.1.4</span></strong>
+            <p>Automatic update checks with a native install window.</p>
           </div>
           <div className="mac-download-links">
-            <a href="https://github.com/mahdichafik-ship-it/nour/releases/download/v0.1.3/Nour-0.1.3-arm64.dmg">Apple Silicon</a>
-            <a href="https://github.com/mahdichafik-ship-it/nour/releases/download/v0.1.3/Nour-0.1.3-x64.dmg">Intel Mac</a>
+            <a href="https://github.com/mahdichafik-ship-it/nour/releases/download/v0.1.4/Nour-0.1.4-arm64.dmg">Apple Silicon</a>
+            <a href="https://github.com/mahdichafik-ship-it/nour/releases/download/v0.1.4/Nour-0.1.4-x64.dmg">Intel Mac</a>
           </div>
         </section>
       )}
