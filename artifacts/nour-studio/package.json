@@ -12,6 +12,8 @@
     "desktop:release": "bash ./scripts/build-macos-release.sh",
     "desktop:check": "cargo check --manifest-path ./src-tauri/Cargo.toml",
     "desktop:prepare-release": "node ./scripts/prepare-tauri-release-config.mjs",
+    "desktop:preflight": "node ./scripts/preflight-release.mjs",
+    "desktop:test-preflight": "node --test ./scripts/*.test.mjs",
     "desktop:stage-release": "node ./scripts/stage-tauri-macos-release.mjs",
     "desktop:merge-updater": "node ./scripts/merge-tauri-updater-metadata.mjs",
     "desktop:validate-updater": "node ./scripts/validate-tauri-updater-metadata.mjs",

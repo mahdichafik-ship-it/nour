@@ -42,8 +42,10 @@ Production desktop releases use `.github/workflows/nour-desktop-release.yml`.
 The workflow follows the proven Volume Capture release strategy while keeping
 Nour on Tauri:
 
-1. A native Apple-silicon runner builds `aarch64-apple-darwin`.
-2. A native Intel runner builds `x86_64-apple-darwin`.
+1. One macOS preflight job validates release credentials before either native
+   build can start (details below).
+2. Native Apple-silicon and Intel runners build `aarch64-apple-darwin` and
+   `x86_64-apple-darwin`, respectively.
 3. Tauri signs, notarizes, and creates an architecture-specific DMG and updater
    archive on each runner.
 4. Both outputs are verified with `codesign`, Gatekeeper, and `stapler`.
@@ -63,11 +65,59 @@ Required GitHub Actions secrets:
 - `APPLE_ID`
 - `APPLE_PASSWORD`: Apple app-specific password
 - `APPLE_TEAM_ID`
-- `TAURI_SIGNING_PRIVATE_KEY`
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-- `TAURI_UPDATER_PUBLIC_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY`: the complete base64-encoded contents of the
+  existing Tauri signer private-key file, not a path, PEM key, or just its inner
+  minisign line
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: the password for that private key
+  (this release workflow requires a nonempty password)
+- `TAURI_UPDATER_PUBLIC_KEY`: the complete base64-encoded contents of the
+  matching Tauri signer `.pub` file, used in the shipped updater configuration
 
 GitHub automatically supplies `GITHUB_TOKEN`.
+
+### Credential preflight and safe failures
+
+The `preflight` job must succeed before `build-mac` starts either architecture.
+It does not compile Rust, submit an app to Apple, import a certificate, upload
+artifacts, edit secrets, or publish a release.
+
+- All nine required secrets are checked for presence. Certificate import and
+  signing validation remain in the native build; presence does not establish
+  certificate validity.
+- The updater check validates the key envelopes, uses the installed Tauri signer
+  to decode/decrypt the private key and sign a disposable payload, and verifies
+  that signature with `TAURI_UPDATER_PUBLIC_KEY`, the public key prepared into
+  the app's updater configuration. A malformed key, incorrect password, or
+  mismatched pair fails before the Apple check and native compilation.
+- `xcrun notarytool history` authenticates `APPLE_ID`, `APPLE_PASSWORD`, and
+  `APPLE_TEAM_ID` together using a read-only request. Empty history is valid.
+  A 401/403 reports the three secret names and asks you to check the app-specific
+  password and account/team pairing. Network, timeout, and tool failures fail
+  closed with a separate safe diagnostic; they do not prove credentials invalid.
+
+Credential commands run without shell tracing. Sensitive arguments and tool
+stdout/stderr are never forwarded to logs, including on failure. Updater
+temporary files are restricted to a private temporary directory and removed on
+success and failure; they are not release assets. Do not add debug output,
+environment dumps, or artifact uploads of preflight temporary files.
+
+If preflight fails, correct only the named secret's formatting or value through
+GitHub's secret settings, then explicitly rerun the release when ready. Preserve
+the existing updater key pair: replacing it can prevent installed apps from
+accepting updates. No key rotation, secret changes, tag movement, workflow
+dispatch, or publication is performed by the preflight tooling.
+
+Run the regression checks without repository credentials:
+
+```sh
+pnpm --filter @workspace/nour-studio run desktop:test-preflight
+```
+
+These tests generate disposable keys and cover signing success, malformed
+inputs, incorrect passwords, mismatched public keys, safe diagnostics, and
+temporary-file cleanup. Apple success/rejection/network cases use a stubbed
+command runner; a real Apple account check runs only in the macOS release
+preflight with the explicitly configured secrets.
 
 Expected release files for version `0.1.0`:
 
