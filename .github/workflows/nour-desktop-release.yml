@@ -237,7 +237,7 @@ jobs:
           if-no-files-found: error
           path: release/*
 
-  publish-release:
+  draft-release:
     needs: combine-mac
     runs-on: ubuntu-latest
     permissions:
@@ -257,7 +257,7 @@ jobs:
           draft: true
           files: release/*
 
-      - name: Verify uploaded assets and publish
+      - name: Verify uploaded draft assets
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
@@ -269,6 +269,61 @@ jobs:
             --json assets \
             --jq '.assets[].name' | sort)"
           test "$uploaded" = "$expected"
+
+  test-native-update:
+    needs: [combine-mac, draft-release]
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: macos-15-intel
+            runner_architecture: x86_64
+          - architecture: arm64
+            runner: macos-14
+            runner_architecture: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout updater test harness
+        uses: actions/checkout@v4
+
+      - name: Verify native runner architecture
+        env:
+          EXPECTED_RUNNER_ARCHITECTURE: ${{ matrix.runner_architecture }}
+        run: test "$(uname -m)" = "$EXPECTED_RUNNER_ARCHITECTURE"
+
+      - name: Download signed draft candidate
+        uses: actions/download-artifact@v4
+        with:
+          name: nour-desktop-release
+          path: release
+
+      - name: Install previous version and complete a real update
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          chmod +x artifacts/nour-studio/scripts/test-macos-updater.sh
+          artifacts/nour-studio/scripts/test-macos-updater.sh \
+            "${{ matrix.architecture }}" \
+            "$GITHUB_WORKSPACE/release" \
+            "${RELEASE_VERSION#v}"
+
+  publish-release:
+    needs: test-native-update
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish update-tested release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
           gh release edit "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --draft=false \
