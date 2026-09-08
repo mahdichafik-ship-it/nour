@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Download, RefreshCw, X } from 'lucide-react';
 
 type UpdateEvent =
@@ -28,17 +28,18 @@ const getUpdater = () => (window as TauriWindow).__TAURI__?.updater;
 
 export default function DesktopUpdatePrompt() {
   const [update, setUpdate] = useState<DesktopUpdate | null>(null);
-  const [checking, setChecking] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [installed, setInstalled] = useState(false);
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [contentLength, setContentLength] = useState<number | null>(null);
+  const checkingRef = useRef(false);
+  const installingRef = useRef(false);
 
   const checkForUpdate = useCallback(async () => {
     const updater = getUpdater();
-    if (!updater || checking || installing) return;
+    if (!updater || checkingRef.current || installingRef.current) return;
 
-    setChecking(true);
+    checkingRef.current = true;
     try {
       const available = await updater.check();
       if (available) setUpdate(available);
@@ -46,9 +47,9 @@ export default function DesktopUpdatePrompt() {
       // Update checks are best-effort. An offline launch should not interrupt editing.
       console.warn('Nour update check failed', error);
     } finally {
-      setChecking(false);
+      checkingRef.current = false;
     }
-  }, [checking, installing]);
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void checkForUpdate(), 1200);
@@ -62,6 +63,7 @@ export default function DesktopUpdatePrompt() {
   const installUpdate = async () => {
     if (!update) return;
 
+    installingRef.current = true;
     setInstalling(true);
     setDownloadedBytes(0);
     setContentLength(null);
@@ -73,9 +75,12 @@ export default function DesktopUpdatePrompt() {
           setDownloadedBytes((current) => current + event.data.chunkLength);
         }
       });
+      installingRef.current = false;
+      setInstalling(false);
       setInstalled(true);
     } catch (error) {
       console.error('Nour update installation failed', error);
+      installingRef.current = false;
       setInstalling(false);
     }
   };
@@ -118,8 +123,8 @@ export default function DesktopUpdatePrompt() {
           </div>
         )}
         {installed ? (
-          <button className="update-primary" onClick={() => window.location.reload()}>
-            <RefreshCw size={14} /> Restart window
+          <button className="update-primary" onClick={() => setUpdate(null)}>
+            <RefreshCw size={14} /> Done — reopen Nour
           </button>
         ) : (
           <div className="update-actions">
