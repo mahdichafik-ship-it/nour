@@ -1,5 +1,10 @@
 export type MediaKind = 'video' | 'audio' | 'image';
 export type Track = 'video' | 'audio';
+export type Adjustments = {
+  exposure: number;
+  contrast: number;
+  saturation: number;
+};
 export type MediaAsset = {
   id: string;
   name: string;
@@ -11,6 +16,7 @@ export type MediaAsset = {
   size?: number;
   nativePath?: string;
   error?: string;
+  adjustments?: Adjustments;
 };
 export type TimelineClip = {
   id: string;
@@ -36,12 +42,16 @@ export type EditorController = {
   setMode: (mode: 'source' | 'timeline') => void;
   currentTime: number;
   seek: (seconds: number) => void;
+  previewSeek: (seconds: number) => void;
+  commitSeek: (seconds: number) => void;
   playing: boolean;
   togglePlay: () => void;
   playbackReady: boolean;
   buffering: boolean;
   setPlaybackReady: (ready: boolean) => void;
+  setMediaClockActive: (active: boolean) => void;
   syncPlaybackTime: (seconds: number) => void;
+  seekRevision: number;
   duration: number;
   playbackDuration: number;
   volume: number;
@@ -55,6 +65,8 @@ export type EditorController = {
   updateClip: (clipId: string, changes: Partial<Pick<TimelineClip, 'start' | 'trimStart' | 'duration' | 'volume' | 'muted'>>) => void;
   removeClip: (clipId: string) => void;
   removeAsset: (assetId: string) => void;
+  updateAssetAdjustments: (assetId: string, adjustments: Partial<Adjustments>) => void;
+  resetAssetAdjustments: (assetId: string) => void;
   importFiles: (files: FileList | File[]) => Promise<void>;
   importNative: () => Promise<void>;
   importing: boolean;

@@ -1,13 +1,45 @@
-import React from 'react';
-import { Play, Pause, Volume2, VolumeX, FileAudio } from 'lucide-react';
+import React, { useRef, useState, useEffect } from 'react';
+import { Play, Pause, Volume2, VolumeX, FileAudio, Maximize, Minimize } from 'lucide-react';
 import { EditorController, formatTime } from './types';
 import { EditorPlayback } from './EditorPlayback';
+import { shouldCommitRangeSeek } from './playback-sync';
 
 export function PlayerArea({ editor }: { editor: EditorController }) {
   const isSource = editor.mode === 'source';
   const selectedAsset = editor.assets.find(a => a.id === editor.selectedAssetId);
   const title = isSource ? selectedAsset?.name || 'No selection' : editor.projectName;
   const isAudio = isSource && selectedAsset?.kind === 'audio';
+
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const seekPointerActive = useRef(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [draftTime, setDraftTime] = useState<number | null>(null);
+
+  useEffect(() => {
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handler);
+    return () => document.removeEventListener('fullscreenchange', handler);
+  }, []);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      viewportRef.current?.requestFullscreen().catch(err => console.error(err));
+    } else {
+      document.exitFullscreen().catch(err => console.error(err));
+    }
+  };
+
+  const previewSeek = (value: number) => {
+    setDraftTime(value);
+    editor.previewSeek(value);
+  };
+
+  const finishPointerSeek = (value: number) => {
+    if (!seekPointerActive.current) return;
+    seekPointerActive.current = false;
+    setDraftTime(null);
+    editor.commitSeek(value);
+  };
 
   return (
     <main className="panel-player">
@@ -22,11 +54,19 @@ export function PlayerArea({ editor }: { editor: EditorController }) {
         >Timeline</button>
       </div>
       
-      <div className="playback-viewport">
+      <div className="playback-viewport" ref={viewportRef}>
         <div className="playback-overlay">
           <div className="playback-title">{isSource ? 'Source' : 'Timeline'}: {title}</div>
           {isAudio && <div className="audio-placeholder"><FileAudio size={48} /></div>}
         </div>
+        <button
+          className="fullscreen-btn"
+          onClick={toggleFullscreen}
+          title={isFullscreen ? "Exit Fullscreen" : "Fullscreen Preview"}
+          aria-label={isFullscreen ? "Exit Fullscreen" : "Fullscreen Preview"}
+        >
+          {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+        </button>
         <EditorPlayback editor={editor} />
       </div>
 
@@ -41,7 +81,7 @@ export function PlayerArea({ editor }: { editor: EditorController }) {
         </button>
         
         <div className="time-display">
-          {formatTime(editor.currentTime)} / {formatTime(editor.playbackDuration)}
+          {formatTime(draftTime ?? editor.currentTime)} / {formatTime(editor.playbackDuration)}
           {editor.buffering && <span role="status">Buffering…</span>}
         </div>
 
@@ -51,8 +91,25 @@ export function PlayerArea({ editor }: { editor: EditorController }) {
           min={0}
           max={editor.playbackDuration || 1}
           step={0.1}
-          value={editor.currentTime}
-          onChange={(e) => editor.seek(parseFloat(e.target.value))}
+          value={draftTime ?? editor.currentTime}
+          onPointerDown={(e) => {
+            seekPointerActive.current = true;
+            previewSeek(parseFloat(e.currentTarget.value));
+          }}
+          onChange={(e) => {
+            const value = parseFloat(e.currentTarget.value);
+            if (shouldCommitRangeSeek('change', seekPointerActive.current)) {
+              setDraftTime(null);
+              editor.commitSeek(value);
+            } else {
+              previewSeek(value);
+            }
+          }}
+          onPointerUp={(e) => {
+            if (shouldCommitRangeSeek('pointerup', seekPointerActive.current)) finishPointerSeek(parseFloat(e.currentTarget.value));
+          }}
+          onPointerCancel={(e) => finishPointerSeek(parseFloat(e.currentTarget.value))}
+          onBlur={(e) => finishPointerSeek(parseFloat(e.currentTarget.value))}
           data-testid="input-seek"
           aria-label="Seek"
         />

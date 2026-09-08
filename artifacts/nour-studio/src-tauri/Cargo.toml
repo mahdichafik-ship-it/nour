@@ -1,6 +1,6 @@
 [package]
 name = "nour-desktop"
-version = "0.1.2"
+version = "0.1.3"
 description = "Nour Local Video Studio for macOS"
 authors = ["Nour Studio"]
 edition = "2021"

@@ -61,6 +61,8 @@ export function useEditorEngine(): EditorController {
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [playbackReady, setPlaybackReadyState] = useState(false);
+  const [mediaClockActive, setMediaClockActiveState] = useState(false);
+  const [seekRevision, setSeekRevision] = useState(0);
   const [buffering, setBuffering] = useState(false);
   const [volume, setVolume] = useState(1);
   const [muted, setMuted] = useState(false);
@@ -79,10 +81,33 @@ export function useEditorEngine(): EditorController {
   const playbackDuration = mode === 'source' ? (assets.find(a => a.id === selectedAssetId)?.duration ?? 0) : duration;
   const durationRef = useRef(playbackDuration); useEffect(() => { durationRef.current = playbackDuration; }, [playbackDuration]);
   const reportError = useCallback((message: string) => { setPlaying(false); setBuffering(false); setError(message); }, []);
-  const seek = useCallback((seconds: number) => { if (ready.current) setCurrentTime(Math.min(durationRef.current, Math.max(0, finite(seconds)))); }, []);
+  const previewSeek = useCallback((seconds: number) => {
+    if (!ready.current) return;
+    const next = Math.min(durationRef.current, Math.max(0, finite(seconds)));
+    setPlaying(false);
+    setBuffering(false);
+    timeRef.current = next;
+    setCurrentTime(next);
+  }, []);
+  const commitSeek = useCallback((seconds: number) => {
+    if (!ready.current) return;
+    const next = Math.min(durationRef.current, Math.max(0, finite(seconds)));
+    setPlaying(false);
+    setBuffering(false);
+    timeRef.current = next;
+    setCurrentTime(next);
+    setSeekRevision(value => value + 1);
+  }, []);
+  const seek = commitSeek;
   const setPlaybackReady = useCallback((value: boolean) => setPlaybackReadyState(value), []);
+  const setMediaClockActive = useCallback((value: boolean) => setMediaClockActiveState(value), []);
   useEffect(() => setBuffering(playing && !playbackReady), [playing, playbackReady]);
-  const syncPlaybackTime = useCallback((seconds: number) => { if (Number.isFinite(seconds)) { timeRef.current = Math.min(durationRef.current, Math.max(0, seconds)); setCurrentTime(timeRef.current); } }, []);
+  const syncPlaybackTime = useCallback((seconds: number) => {
+    if (!Number.isFinite(seconds)) return;
+    timeRef.current = Math.min(durationRef.current, Math.max(0, seconds));
+    setCurrentTime(timeRef.current);
+    if (timeRef.current >= durationRef.current) setPlaying(false);
+  }, []);
   const pauseReset = useCallback(() => { setPlaying(false); setBuffering(false); setCurrentTime(0); }, []);
   const setMode = useCallback((next: 'source' | 'timeline') => { if (!ready.current) return; pauseReset(); modeRef.current = next; durationRef.current = next === 'timeline' ? Math.max(0, ...clipsRef.current.map(c => c.start + c.duration)) : (assetsRef.current.find(a => a.id === selectedRef.current)?.duration ?? 0); setModeState(next); }, [pauseReset]);
   const selectAsset = useCallback((assetId: string) => { if (!ready.current) return; setPlaying(false); setCurrentTime(0); setSelectedClipId(null); setSelectedAssetId(assetId); selectedRef.current = assetId; modeRef.current = 'source'; setModeState('source'); }, []);
@@ -91,9 +116,9 @@ export function useEditorEngine(): EditorController {
   useEffect(() => {
     let frame = 0, last = 0;
     const tick = (now: number) => { if (!last) last = now; const next = timeRef.current + (now - last) / 1000; last = now; if (next >= durationRef.current) { timeRef.current = durationRef.current; setCurrentTime(durationRef.current); setPlaying(false); return; } timeRef.current = next; setCurrentTime(next); frame = requestAnimationFrame(tick); };
-    if (playing && playbackReady && durationRef.current > 0) frame = requestAnimationFrame(tick);
+    if (playing && playbackReady && !mediaClockActive && durationRef.current > 0) frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [playing, playbackReady]);
+  }, [playing, playbackReady, mediaClockActive]);
   useEffect(() => { timeRef.current = currentTime; }, [currentTime]);
   useEffect(() => {
     latestProject.current = { projectName, assets: assets.map(({ src, ...a }) => a), clips, trackMuted };
@@ -175,6 +200,22 @@ export function useEditorEngine(): EditorController {
     if (selectedAssetId === assetId) { selectedRef.current = null; pauseReset(); } if (asset?.src.startsWith('blob:')) { URL.revokeObjectURL(asset.src); urls.current.delete(asset.src); }
   }, [pauseReset, selectedAssetId]);
 
+  const updateAssetAdjustments = useCallback((assetId: string, changes: Partial<{ exposure: number, contrast: number, saturation: number }>) => {
+    if (!ready.current) return;
+    setAssets(old => old.map(a => a.id === assetId ? { ...a, adjustments: { exposure: 1, contrast: 1, saturation: 1, ...a.adjustments, ...changes } } : a));
+  }, []);
+
+  const resetAssetAdjustments = useCallback((assetId: string) => {
+    if (!ready.current) return;
+    setAssets(old => old.map(a => {
+      if (a.id === assetId) {
+        const { adjustments, ...rest } = a;
+        return rest;
+      }
+      return a;
+    }));
+  }, []);
+
   const importFiles = useCallback(async (input: FileList | File[]) => {
     if (!ready.current) { setError('Wait for the project to finish loading before importing.'); return; }
     if (native) { setError('Use the desktop Import picker to add media in the native app.'); return; }
@@ -201,5 +242,5 @@ export function useEditorEngine(): EditorController {
   const newProject = useCallback(() => { ready.current = true; pauseReset(); assetsRef.current.forEach(a => { if (a.src.startsWith('blob:')) { URL.revokeObjectURL(a.src); urls.current.delete(a.src); } }); assetsRef.current = []; clipsRef.current = []; selectedRef.current = null; modeRef.current = 'source'; setProjectName('Untitled project'); setAssets([]); setClips([]); setSelectedAssetId(null); setSelectedClipId(null); setTrackMuted({ video: false, audio: false }); setModeState('source'); setSaveStatus('saving'); setError(null); }, [pauseReset]);
   const exportProject = useCallback(() => { const data: StoredProject = { projectName, assets: assets.map(({ src, ...a }) => a), clips, trackMuted }; const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })); a.download = `${projectName || 'project'}.nour.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 0); }, [projectName, assets, clips, trackMuted]);
 
-  return { projectName, setProjectName: name => { if (ready.current) setProjectName(name); }, assets, clips, selectedAssetId, selectedClipId, selectAsset, selectClip, mode, setMode, currentTime, seek, playing, togglePlay: () => { if (!ready.current) return; if (!playbackDuration) { reportError('Select supported media or add a clip before playing.'); return; } if (currentTime >= playbackDuration) setCurrentTime(0); setPlaying(p => !p); }, playbackReady, buffering, setPlaybackReady, syncPlaybackTime, duration, playbackDuration, volume, setVolume: v => setVolume(Math.min(1, Math.max(0, v))), muted, setMuted, trackMuted, toggleTrackMute: track => setTrackMuted(m => ({ ...m, [track]: !m[track] })), addToTimeline, moveClip, updateClip, removeClip, removeAsset, importFiles, importNative, importing, isNative: native, error, reportError, clearError: () => setError(null), saveStatus, newProject, exportProject };
+  return { projectName, setProjectName: name => { if (ready.current) setProjectName(name); }, assets, clips, selectedAssetId, selectedClipId, selectAsset, selectClip, mode, setMode, currentTime, seek, previewSeek, commitSeek, playing, togglePlay: () => { if (!ready.current) return; if (!playbackDuration) { reportError('Select supported media or add a clip before playing.'); return; } if (currentTime >= playbackDuration) { timeRef.current = 0; setCurrentTime(0); setSeekRevision(value => value + 1); } setPlaying(p => !p); }, playbackReady, buffering, setPlaybackReady, setMediaClockActive, syncPlaybackTime, seekRevision, duration, playbackDuration, volume, setVolume: v => setVolume(Math.min(1, Math.max(0, v))), muted, setMuted, trackMuted, toggleTrackMute: track => setTrackMuted(m => ({ ...m, [track]: !m[track] })), addToTimeline, moveClip, updateClip, removeClip, removeAsset, updateAssetAdjustments, resetAssetAdjustments, importFiles, importNative, importing, isNative: native, error, reportError, clearError: () => setError(null), saveStatus, newProject, exportProject };
 }

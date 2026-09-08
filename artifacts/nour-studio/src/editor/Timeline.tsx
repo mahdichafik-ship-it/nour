@@ -53,13 +53,13 @@ export function Timeline({ editor }: { editor: EditorController }) {
       <div className="timeline-headers">
         <div className="track-header">
           <span>Video ({videoClips.length})</span>
-          <button onClick={() => editor.toggleTrackMute('video')} title={editor.trackMuted.video ? "Unmute Video Track" : "Mute Video Track"}>
-            {editor.trackMuted.video ? <VolumeX size={14} /> : <Video size={14} />}
+          <button className={`track-mute-btn ${editor.trackMuted.video ? 'muted' : ''}`} onClick={() => editor.toggleTrackMute('video')} title={editor.trackMuted.video ? "Unmute Video Track" : "Mute Video Track"}>
+            {editor.trackMuted.video ? <VolumeX size={14} /> : <Volume2 size={14} />}
           </button>
         </div>
         <div className="track-header">
           <span>Audio ({audioClips.length})</span>
-          <button onClick={() => editor.toggleTrackMute('audio')} title={editor.trackMuted.audio ? "Unmute Audio Track" : "Mute Audio Track"}>
+          <button className={`track-mute-btn ${editor.trackMuted.audio ? 'muted' : ''}`} onClick={() => editor.toggleTrackMute('audio')} title={editor.trackMuted.audio ? "Unmute Audio Track" : "Mute Audio Track"}>
             {editor.trackMuted.audio ? <VolumeX size={14} /> : <Volume2 size={14} />}
           </button>
         </div>

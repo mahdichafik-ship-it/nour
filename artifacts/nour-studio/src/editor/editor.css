@@ -505,6 +505,137 @@
   cursor: not-allowed;
 }
 
+/* Adjustments Section */
+.adjustments-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--e-border);
+}
+.adjustments-section h5 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--e-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.adjustment-note {
+  font-size: 10px;
+  color: var(--e-accent);
+  margin: 0 0 4px 0;
+  line-height: 1.3;
+}
+.slider-with-val {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.slider-with-val input {
+  flex: 1;
+  min-width: 0;
+}
+.slider-with-val span {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--e-text);
+  width: 32px;
+  text-align: right;
+}
+.reset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--e-bg);
+  border: 1px solid var(--e-border);
+  color: var(--e-text);
+  padding: 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  align-self: flex-start;
+}
+.reset-btn:hover {
+  background: var(--e-border);
+  color: var(--e-text);
+}
+
+/* Fullscreen Button */
+.fullscreen-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 20;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.fullscreen-btn:hover {
+  background: rgba(0, 0, 0, 0.8);
+}
+
+/* Editor Playback Overrides */
+.editor-playback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.editor-playback-visual {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  position: relative;
+}
+.editor-playback-visual video,
+.editor-playback-visual img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  width: 100%;
+  height: 100%;
+}
+
+/* Track Mute Controls */
+.track-mute-btn {
+  background: var(--e-bg);
+  border: 1px solid var(--e-border);
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--e-text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.track-mute-btn:hover {
+  border-color: var(--e-text);
+  color: var(--e-text);
+}
+.track-mute-btn.muted {
+  background: rgba(255, 94, 94, 0.1);
+  border-color: rgba(255, 94, 94, 0.2);
+  color: var(--e-error);
+}
+
 @media (max-width: 900px) {
   .workspace-middle {
     flex-direction: column;

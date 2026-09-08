@@ -1,6 +1,6 @@
 import React from 'react';
-import { Trash } from 'lucide-react';
-import { EditorController, MediaAsset, TimelineClip, formatTime } from './types';
+import { Trash, RotateCcw } from 'lucide-react';
+import { EditorController, MediaAsset, TimelineClip, formatTime, Adjustments } from './types';
 
 export function Inspector({ editor }: { editor: EditorController }) {
   const handleDeleteAsset = (assetId: string) => {
@@ -27,6 +27,8 @@ export function Inspector({ editor }: { editor: EditorController }) {
           <AssetProperties 
             asset={editor.assets.find(a => a.id === editor.selectedAssetId)!} 
             onDelete={() => handleDeleteAsset(editor.selectedAssetId!)}
+            updateAdjustments={(changes) => editor.updateAssetAdjustments(editor.selectedAssetId!, changes)}
+            resetAdjustments={() => editor.resetAssetAdjustments(editor.selectedAssetId!)}
           />
         ) : editor.mode === 'timeline' && editor.selectedClipId ? (
           <ClipProperties 
@@ -34,6 +36,8 @@ export function Inspector({ editor }: { editor: EditorController }) {
             asset={editor.assets.find(a => a.id === editor.clips.find(c => c.id === editor.selectedClipId)?.assetId)!}
             updateClip={(changes) => editor.updateClip(editor.selectedClipId!, changes)}
             onDelete={() => handleDeleteClip(editor.selectedClipId!)}
+            updateAdjustments={(changes) => editor.updateAssetAdjustments(editor.clips.find(c => c.id === editor.selectedClipId)!.assetId, changes)}
+            resetAdjustments={() => editor.resetAssetAdjustments(editor.clips.find(c => c.id === editor.selectedClipId)!.assetId)}
           />
         ) : (
           <div className="empty-inspector">Select an item to view properties.</div>
@@ -43,7 +47,44 @@ export function Inspector({ editor }: { editor: EditorController }) {
   );
 }
 
-function AssetProperties({ asset, onDelete }: { asset: MediaAsset, onDelete: () => void }) {
+function ColorAdjustments({ asset, updateAdjustments, resetAdjustments }: { asset: MediaAsset, updateAdjustments: (changes: Partial<Adjustments>) => void, resetAdjustments: () => void }) {
+  if (asset.kind === 'audio') return null;
+  return (
+    <div className="adjustments-section">
+      <h5>Preview Adjustments</h5>
+      <p className="adjustment-note">Preview metadata only. Saved in project, not rendered.</p>
+
+      <div className="prop-group">
+        <label>Exposure</label>
+        <div className="slider-with-val">
+          <input type="range" min="0" max="3" step="0.05" value={asset.adjustments?.exposure ?? 1} onChange={(e) => updateAdjustments({ exposure: parseFloat(e.target.value) })} />
+          <span>{(asset.adjustments?.exposure ?? 1).toFixed(2)}</span>
+        </div>
+      </div>
+      <div className="prop-group">
+        <label>Contrast</label>
+        <div className="slider-with-val">
+          <input type="range" min="0" max="3" step="0.05" value={asset.adjustments?.contrast ?? 1} onChange={(e) => updateAdjustments({ contrast: parseFloat(e.target.value) })} />
+          <span>{(asset.adjustments?.contrast ?? 1).toFixed(2)}</span>
+        </div>
+      </div>
+      <div className="prop-group">
+        <label>Saturation</label>
+        <div className="slider-with-val">
+          <input type="range" min="0" max="3" step="0.05" value={asset.adjustments?.saturation ?? 1} onChange={(e) => updateAdjustments({ saturation: parseFloat(e.target.value) })} />
+          <span>{(asset.adjustments?.saturation ?? 1).toFixed(2)}</span>
+        </div>
+      </div>
+      {(asset.adjustments) && (
+        <button className="reset-btn" onClick={resetAdjustments}>
+          <RotateCcw size={12} /> Reset
+        </button>
+      )}
+    </div>
+  );
+}
+
+function AssetProperties({ asset, onDelete, updateAdjustments, resetAdjustments }: { asset: MediaAsset, onDelete: () => void, updateAdjustments: (c: Partial<Adjustments>) => void, resetAdjustments: () => void }) {
   if (!asset) return null;
   return (
     <div className="properties-form">
@@ -52,6 +93,8 @@ function AssetProperties({ asset, onDelete }: { asset: MediaAsset, onDelete: () 
       <div className="prop-row"><span>Duration:</span> <span>{formatTime(asset.duration)}</span></div>
       {asset.width && <div className="prop-row"><span>Resolution:</span> <span>{asset.width}x{asset.height}</span></div>}
       
+      <ColorAdjustments asset={asset} updateAdjustments={updateAdjustments} resetAdjustments={resetAdjustments} />
+
       <button className="danger-btn" onClick={onDelete}>
         <Trash size={14} /> Delete Asset
       </button>
@@ -59,7 +102,7 @@ function AssetProperties({ asset, onDelete }: { asset: MediaAsset, onDelete: () 
   );
 }
 
-function ClipProperties({ clip, asset, updateClip, onDelete }: { clip: TimelineClip, asset: MediaAsset, updateClip: (c: Partial<Pick<TimelineClip, 'start' | 'trimStart' | 'duration' | 'volume' | 'muted'>>) => void, onDelete: () => void }) {
+function ClipProperties({ clip, asset, updateClip, onDelete, updateAdjustments, resetAdjustments }: { clip: TimelineClip, asset: MediaAsset, updateClip: (c: Partial<Pick<TimelineClip, 'start' | 'trimStart' | 'duration' | 'volume' | 'muted'>>) => void, onDelete: () => void, updateAdjustments: (c: Partial<Adjustments>) => void, resetAdjustments: () => void }) {
   if (!clip || !asset) return null;
   return (
     <div className="properties-form">
@@ -92,6 +135,8 @@ function ClipProperties({ clip, asset, updateClip, onDelete }: { clip: TimelineC
           <input id="clip-volume" type="range" min="0" max="1" step="0.01" value={clip.muted ? 0 : clip.volume} onChange={(e) => updateClip({ volume: parseFloat(e.target.value) })} />
         </div>
       ) : null}
+
+      <ColorAdjustments asset={asset} updateAdjustments={updateAdjustments} resetAdjustments={resetAdjustments} />
 
       <button className="danger-btn" onClick={onDelete}>
         <Trash size={14} /> Delete Clip
