@@ -1,0 +1,74 @@
+export type MediaKind = 'video' | 'audio' | 'image';
+export type Track = 'video' | 'audio';
+export type MediaAsset = {
+  id: string;
+  name: string;
+  kind: MediaKind;
+  src: string;
+  duration: number;
+  width?: number;
+  height?: number;
+  size?: number;
+  nativePath?: string;
+  error?: string;
+};
+export type TimelineClip = {
+  id: string;
+  assetId: string;
+  track: Track;
+  start: number;
+  trimStart: number;
+  duration: number;
+  volume: number;
+  muted: boolean;
+};
+export type NativeMediaFile = { path: string; name: string; size: number };
+export type EditorController = {
+  projectName: string;
+  setProjectName: (name: string) => void;
+  assets: MediaAsset[];
+  clips: TimelineClip[];
+  selectedAssetId: string | null;
+  selectedClipId: string | null;
+  selectAsset: (id: string) => void;
+  selectClip: (id: string) => void;
+  mode: 'source' | 'timeline';
+  setMode: (mode: 'source' | 'timeline') => void;
+  currentTime: number;
+  seek: (seconds: number) => void;
+  playing: boolean;
+  togglePlay: () => void;
+  playbackReady: boolean;
+  buffering: boolean;
+  setPlaybackReady: (ready: boolean) => void;
+  syncPlaybackTime: (seconds: number) => void;
+  duration: number;
+  playbackDuration: number;
+  volume: number;
+  setVolume: (volume: number) => void;
+  muted: boolean;
+  setMuted: (muted: boolean) => void;
+  trackMuted: Record<Track, boolean>;
+  toggleTrackMute: (track: Track) => void;
+  addToTimeline: (assetId: string, start?: number, track?: Track) => void;
+  moveClip: (clipId: string, start: number, track?: Track) => void;
+  updateClip: (clipId: string, changes: Partial<Pick<TimelineClip, 'start' | 'trimStart' | 'duration' | 'volume' | 'muted'>>) => void;
+  removeClip: (clipId: string) => void;
+  removeAsset: (assetId: string) => void;
+  importFiles: (files: FileList | File[]) => Promise<void>;
+  importNative: () => Promise<void>;
+  importing: boolean;
+  isNative: boolean;
+  error: string | null;
+  reportError: (message: string) => void;
+  clearError: () => void;
+  saveStatus: 'loading' | 'saving' | 'saved' | 'error';
+  newProject: () => void;
+  exportProject: () => void;
+};
+
+export function formatTime(seconds: number): string {
+  const safe = Math.max(0, Number.isFinite(seconds) ? seconds : 0);
+  const whole = Math.floor(safe);
+  return `${Math.floor(whole / 60).toString().padStart(2, '0')}:${(whole % 60).toString().padStart(2, '0')}.${Math.floor((safe % 1) * 10)}`;
+}
