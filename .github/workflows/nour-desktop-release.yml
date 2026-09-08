@@ -140,7 +140,7 @@ jobs:
       - name: Stage architecture-specific release assets
         working-directory: artifacts/nour-studio
         run: |
-          pnpm run desktop:stage-release -- \
+          pnpm run desktop:stage-release \
             "${{ matrix.rust_target }}" \
             "${{ matrix.architecture }}" \
             "$RUNNER_TEMP/nour-release"
@@ -195,9 +195,9 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
-          pnpm --dir artifacts/nour-studio run desktop:merge-updater -- \
+          pnpm --dir artifacts/nour-studio run desktop:merge-updater \
             "$GITHUB_WORKSPACE/release" "$version"
-          pnpm --dir artifacts/nour-studio run desktop:validate-updater -- \
+          pnpm --dir artifacts/nour-studio run desktop:validate-updater \
             "$GITHUB_WORKSPACE/release" "$version"
 
       - name: Stage complete release
