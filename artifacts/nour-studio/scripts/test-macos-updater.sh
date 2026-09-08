@@ -19,9 +19,30 @@ test -s "$metadata"
 work_directory="$(mktemp -d)"
 mount_directory="$work_directory/previous-dmg"
 server_pid=""
+nour_pid=""
+failure_phase="bootstrap"
+runner_temp="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
+diagnostics_directory="${NOUR_UPDATER_DIAGNOSTICS_DIR:-$runner_temp/nour-updater-diagnostics-$architecture}"
+mkdir -p "$diagnostics_directory"
 
 cleanup() {
+  exit_status=$?
   set +e
+  if [[ "$exit_status" -ne 0 ]]; then
+    screencapture -x "$diagnostics_directory/failure-screenshot.png"
+  fi
+  {
+    echo "exit_status=$exit_status"
+    echo "failure_phase=$failure_phase"
+    echo "architecture=$architecture"
+    echo "candidate_version=$candidate_version"
+  } >"$diagnostics_directory/summary.txt"
+  [[ -f "$work_directory/nour-process.log" ]] && cp "$work_directory/nour-process.log" "$diagnostics_directory/nour-process.log"
+  [[ -f "$work_directory/updater-server.log" ]] && cp "$work_directory/updater-server.log" "$diagnostics_directory/updater-server.log"
+  if [[ -n "$nour_pid" ]]; then
+    kill "$nour_pid" >/dev/null 2>&1
+    wait "$nour_pid" >/dev/null 2>&1
+  fi
   osascript -e 'tell application "Nour" to quit' >/dev/null 2>&1
   [[ -n "$server_pid" ]] && sudo kill "$server_pid" >/dev/null 2>&1
   mount | grep -q "on $mount_directory " && hdiutil detach "$mount_directory" >/dev/null 2>&1
@@ -64,6 +85,8 @@ hdiutil detach "$mount_directory"
 
 installed_version="$(defaults read /Applications/Nour.app/Contents/Info CFBundleShortVersionString)"
 test "$installed_version" = "$previous_version"
+app_binary="/Applications/Nour.app/Contents/MacOS/nour-desktop"
+test -x "$app_binary"
 
 echo "Creating a runner-only trusted HTTPS updater endpoint."
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
@@ -113,6 +136,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         with open(path, "rb") as asset:
             self.wfile.write(asset.read())
+
+    def log_message(self, format, *args):
+        print("%s - %s" % (self.log_date_time_string(), format % args), flush=True)
 
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(os.path.join(root, "server.crt"), os.path.join(root, "server.key"))
@@ -164,10 +190,13 @@ wait_for_button() {
 }
 
 echo "Launching the previous app and waiting for update detection."
-open /Applications/Nour.app
+failure_phase="update-detection"
+"$app_binary" >"$work_directory/nour-process.log" 2>&1 &
+nour_pid=$!
 wait_for_button "Install update" 45
 
 echo "Waiting for signature validation and installation to finish."
+failure_phase="installation"
 wait_for_button "Done" 90
 osascript -e 'tell application "Nour" to quit'
 for _ in $(seq 1 30); do
@@ -181,7 +210,10 @@ test "$updated_version" = "$candidate_version"
 codesign --verify --deep --strict --verbose=2 /Applications/Nour.app
 
 echo "Reopening Nour ${candidate_version} after the installed update."
-open /Applications/Nour.app
+failure_phase="reopen"
+printf '\n--- reopen ---\n' >>"$work_directory/nour-process.log"
+"$app_binary" >>"$work_directory/nour-process.log" 2>&1 &
+nour_pid=$!
 for _ in $(seq 1 30); do
   if pgrep -x nour-desktop >/dev/null; then
     sleep 10
