@@ -22,6 +22,44 @@ const fileKind = (name: string, type = ''): MediaKind | null => {
 const id = () => crypto.randomUUID();
 const finite = (n: number, fallback = 0) => Number.isFinite(n) ? n : fallback;
 const normalizeProjectSettings = (value?: Partial<ProjectSettings>): ProjectSettings => ({ ...DEFAULT_PROJECT_SETTINGS, ...value });
+const rasterizeOverlay = (overlay: TextOverlay, resolution: ProjectSettings['resolution']) => {
+  const [width, height] = resolution.split('x').map(Number);
+  const fontSize = Math.max(28, Math.round(height / 18));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = Math.ceil(fontSize * 4.2);
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not prepare title or caption artwork.');
+  context.font = `600 ${fontSize}px Inter, Arial, sans-serif`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.lineJoin = 'round';
+  const words = overlay.text.trim().split(/\s+/);
+  const lines: string[] = [];
+  let line = '';
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (line && context.measureText(candidate).width > width * 0.88) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = candidate;
+    }
+  }
+  if (line) lines.push(line);
+  const visibleLines = lines.slice(0, 3);
+  const lineHeight = fontSize * 1.18;
+  const firstY = canvas.height / 2 - ((visibleLines.length - 1) * lineHeight) / 2;
+  visibleLines.forEach((text, index) => {
+    const y = firstY + index * lineHeight;
+    context.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+    context.lineWidth = Math.max(4, fontSize / 12);
+    context.strokeText(text, width / 2, y);
+    context.fillStyle = '#ffffff';
+    context.fillText(text, width / 2, y);
+  });
+  return canvas.toDataURL('image/png');
+};
 const DEMO_ASSET_ID = 'nour-demo-frame';
 const DEMO_ASSET_SRC = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#182a2c"/><stop offset="0.52" stop-color="#295050"/><stop offset="1" stop-color="#d49a62"/></linearGradient><linearGradient id="sun" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f5d6a0"/><stop offset="1" stop-color="#d0744d"/></linearGradient></defs><rect width="1920" height="1080" fill="url(#bg)"/><circle cx="1510" cy="260" r="170" fill="url(#sun)" opacity=".92"/><path d="M0 790 360 470l260 230 300-360 420 450 240-220 340 330v180H0Z" fill="#102223" opacity=".9"/><path d="M0 875h1920" stroke="#f4d39c" stroke-width="4" opacity=".7"/><text x="120" y="150" fill="#fff4df" font-family="Arial,sans-serif" font-size="34" letter-spacing="8">NOUR / FIRST CUT</text><text x="120" y="955" fill="#fff4df" font-family="Arial,sans-serif" font-size="72" font-weight="700">A SIMPLE STORY</text><text x="124" y="1008" fill="#f4d39c" font-family="Arial,sans-serif" font-size="24" letter-spacing="4">SAMPLE PROJECT · READY TO EDIT</text></svg>`)}`;
 const roleForKind = (kind: MediaKind): StoryRole => kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : 'a-roll';
@@ -393,7 +431,8 @@ export function useEditorEngine(): EditorController {
     if (!native || !tauri()) { setError('Finished-video export is desktop-only. Use Export JSON in the browser to save project metadata.'); return null; }
     setError(null);
     try {
-      return await tauri()!.invoke<string>('export_video', { request: JSON.stringify({ projectName, ...projectSettings, assets: assets.map(({ src, ...asset }) => asset), clips, overlays, trackMuted }) });
+      const exportOverlays = overlays.map(overlay => ({ ...overlay, imageData: rasterizeOverlay(overlay, projectSettings.resolution) }));
+      return await tauri()!.invoke<string>('export_video', { request: JSON.stringify({ projectName, ...projectSettings, assets: assets.map(({ src, ...asset }) => asset), clips, overlays: exportOverlays, trackMuted }) });
     } catch (e) { const message = String(e); if (message !== 'Export cancelled.') setError(message); return null; }
   }, [assets, clips, native, overlays, projectName, projectSettings, trackMuted]);
 

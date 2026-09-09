@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -61,7 +62,10 @@ struct ExportClip {
 }
 #[derive(Debug, Deserialize)]
 struct ExportOverlay {
-    text: String,
+    #[serde(rename = "text")]
+    _text: String,
+    #[serde(rename = "imageData")]
+    image_data: String,
     start: f64,
     duration: f64,
     position: String,
@@ -155,18 +159,13 @@ fn validate_export(request: &ExportRequest) -> Result<(), String> {
             || overlay.start < 0.0
             || overlay.duration <= 0.0
             || !["top", "center", "bottom"].contains(&overlay.position.as_str())
+            || overlay.image_data.len() > 16_000_000
+            || !overlay.image_data.starts_with("data:image/png;base64,")
         {
             return Err("Overlay timing or position is invalid.".into());
         }
     }
     Ok(())
-}
-
-fn ffmpeg_filter_path(path: &Path) -> String {
-    path.to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace(':', "\\:")
-        .replace('\'', "\\'")
 }
 
 fn temporary_export_path(output: &Path) -> PathBuf {
@@ -187,11 +186,11 @@ struct RenderPlan {
 fn build_render_plan(
     request: &ExportRequest,
     audio_input_indices: &HashSet<usize>,
-    overlay_text_paths: &[PathBuf],
+    overlay_image_paths: &[PathBuf],
     temporary: &Path,
 ) -> Result<RenderPlan, String> {
-    if overlay_text_paths.len() != request.overlays.len() {
-        return Err("Text overlay files could not be prepared.".into());
+    if overlay_image_paths.len() != request.overlays.len() {
+        return Err("Text overlay artwork could not be prepared.".into());
     }
     let (width, height) = request
         .resolution
@@ -232,6 +231,14 @@ fn build_render_plan(
             audio_clips.push((input_index, clip));
         }
     }
+    for path in overlay_image_paths {
+        args.extend([
+            "-loop".into(),
+            "1".into(),
+            "-i".into(),
+            path.to_string_lossy().into_owned(),
+        ]);
+    }
     if video_clips.is_empty() {
         return Err("A video or image clip is required for MP4 export.".into());
     }
@@ -261,17 +268,18 @@ fn build_render_plan(
         ));
         current_video = next_label;
     }
-    for (index, (overlay, text_path)) in request.overlays.iter().zip(overlay_text_paths).enumerate()
-    {
+    for (index, overlay) in request.overlays.iter().enumerate() {
         let position = match overlay.position.as_str() {
-            "top" => "x=(w-text_w)/2:y=h*0.09",
-            "center" => "x=(w-text_w)/2:y=(h-text_h)/2",
-            _ => "x=(w-text_w)/2:y=h*0.86",
+            "top" => "x=0:y=main_h*0.04",
+            "center" => "x=0:y=(main_h-overlay_h)/2",
+            _ => "x=0:y=main_h-overlay_h-main_h*0.04",
         };
+        let overlay_input = request.clips.len() + index;
+        let image_label = format!("overlay_image{index}");
         let next_label = format!("text{index}");
         graph.push_str(&format!(
-            "[{current_video}]drawtext=textfile='{}':reload=0:expansion=none:fontsize=h/18:fontcolor=white:borderw=3:bordercolor=black:{position}:enable='between(t,{},{})'[{next_label}];",
-            ffmpeg_filter_path(text_path),
+            "[{overlay_input}:v]format=rgba,setpts=PTS-STARTPTS+{}/TB[{image_label}];[{current_video}][{image_label}]overlay={position}:shortest=0:eof_action=pass:enable='between(t,{},{})'[{next_label}];",
+            overlay.start,
             overlay.start,
             overlay.start + overlay.duration
         ));
@@ -280,7 +288,7 @@ fn build_render_plan(
     graph.push_str(&format!("[{current_video}]null[video_out];"));
 
     if audio_clips.is_empty() {
-        let silent_input = request.clips.len();
+        let silent_input = request.clips.len() + request.overlays.len();
         args.extend([
             "-f".into(),
             "lavfi".into(),
@@ -380,17 +388,24 @@ async fn export_video(app: tauri::AppHandle, request: String) -> Result<String, 
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "System clock is unavailable.".to_string())?
         .as_nanos();
-    let overlay_text_paths = request
+    let overlay_image_paths = request
         .overlays
         .iter()
         .enumerate()
         .map(|(index, overlay)| {
             let path = std::env::temp_dir().join(format!(
-                "nour-overlay-{}-{overlay_prefix}-{index}.txt",
+                "nour-overlay-{}-{overlay_prefix}-{index}.png",
                 std::process::id()
             ));
-            fs::write(&path, &overlay.text)
-                .map_err(|_| "Could not prepare title or caption text.".to_string())?;
+            let encoded = overlay
+                .image_data
+                .strip_prefix("data:image/png;base64,")
+                .ok_or_else(|| "Title or caption artwork is invalid.".to_string())?;
+            let bytes = BASE64
+                .decode(encoded)
+                .map_err(|_| "Title or caption artwork is invalid.".to_string())?;
+            fs::write(&path, bytes)
+                .map_err(|_| "Could not prepare title or caption artwork.".to_string())?;
             Ok(path)
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -435,7 +450,7 @@ async fn export_video(app: tauri::AppHandle, request: String) -> Result<String, 
     let plan = build_render_plan(
         &request,
         &audio_input_indices,
-        &overlay_text_paths,
+        &overlay_image_paths,
         &temporary,
     )?;
     let _ = (&plan.filter_graph, plan.timeline_duration);
@@ -447,7 +462,7 @@ async fn export_video(app: tauri::AppHandle, request: String) -> Result<String, 
         .output()
         .await
         .map_err(|error| format!("Could not start bundled FFmpeg: {error}"))?;
-    for path in &overlay_text_paths {
+    for path in &overlay_image_paths {
         let _ = fs::remove_file(path);
     }
     if !result.status.success() {
@@ -716,9 +731,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_render_plan, ffmpeg_filter_path, media_extension, safe_project_name,
-        source_file_name, temporary_export_path, validate_export, Adjustments, ExportAsset,
-        ExportClip, ExportOverlay, ExportRequest, TrackMuted,
+        build_render_plan, media_extension, safe_project_name, source_file_name,
+        temporary_export_path, validate_export, Adjustments, ExportAsset, ExportClip,
+        ExportOverlay, ExportRequest, TrackMuted,
     };
     use std::{
         collections::HashSet,
@@ -799,13 +814,15 @@ mod tests {
             ],
             overlays: vec![
                 ExportOverlay {
-                    text: "Nour: creator's cut".into(),
+                    _text: "Nour: creator's cut".into(),
+                    image_data: "data:image/png;base64,AA==".into(),
                     start: 1.0,
                     duration: 1.0,
                     position: "top".into(),
                 },
                 ExportOverlay {
-                    text: "Second line".into(),
+                    _text: "Second line".into(),
+                    image_data: "data:image/png;base64,AA==".into(),
                     start: 4.0,
                     duration: 0.5,
                     position: "bottom".into(),
@@ -861,7 +878,8 @@ mod tests {
                 muted: false,
             }],
             overlays: vec![ExportOverlay {
-                text: "x".into(),
+                _text: "x".into(),
+                image_data: "data:image/png;base64,AA==".into(),
                 start: 0.0,
                 duration: 1.0,
                 position: "top".into(),
@@ -879,11 +897,11 @@ mod tests {
         let request = render_request(["/tmp/interview.mp4", "/tmp/music.wav", "/tmp/silent.mp4"]);
         let audio_inputs = HashSet::from([0, 1]);
         let output = Path::new("/tmp/.nour-test.partial.mp4");
-        let text_paths = vec![
-            Path::new("/tmp/nour-title.txt").to_path_buf(),
-            Path::new("/tmp/nour-caption.txt").to_path_buf(),
+        let image_paths = vec![
+            Path::new("/tmp/nour-title.png").to_path_buf(),
+            Path::new("/tmp/nour-caption.png").to_path_buf(),
         ];
-        let plan = build_render_plan(&request, &audio_inputs, &text_paths, output).unwrap();
+        let plan = build_render_plan(&request, &audio_inputs, &image_paths, output).unwrap();
 
         assert_eq!(plan.timeline_duration, 5.0);
         assert!(plan.filter_graph.contains("d=5[base]"));
@@ -899,9 +917,14 @@ mod tests {
         assert!(plan.filter_graph.contains("adelay=1000ms:all=1,volume=0.8"));
         assert!(plan.filter_graph.contains("[1:a]atrim=start=0:duration=1"));
         assert!(plan.filter_graph.contains("adelay=2000ms:all=1,volume=0.5"));
-        assert!(plan.filter_graph.contains("[text0]drawtext"));
+        assert!(plan
+            .filter_graph
+            .contains("[3:v]format=rgba,setpts=PTS-STARTPTS+1/TB"));
+        assert!(plan.filter_graph.contains("[vg1][overlay_image0]overlay"));
+        assert!(plan
+            .filter_graph
+            .contains("[4:v]format=rgba,setpts=PTS-STARTPTS+4/TB"));
         assert!(plan.filter_graph.contains("[text1]null[video_out]"));
-        assert!(plan.filter_graph.contains("textfile='/tmp/nour-title.txt'"));
         assert_eq!(plan.args.last().unwrap(), "/tmp/.nour-test.partial.mp4");
         let inputs = plan
             .args
@@ -911,41 +934,39 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             inputs,
-            vec!["/tmp/interview.mp4", "/tmp/music.wav", "/tmp/silent.mp4"]
+            vec![
+                "/tmp/interview.mp4",
+                "/tmp/music.wav",
+                "/tmp/silent.mp4",
+                "/tmp/nour-title.png",
+                "/tmp/nour-caption.png"
+            ]
         );
     }
 
     #[test]
     fn muted_tracks_can_fall_back_to_timeline_length_silence() {
         let request = render_request(["video.mp4", "music.wav", "silent.mp4"]);
-        let text_paths = vec![
-            Path::new("title.txt").to_path_buf(),
-            Path::new("caption.txt").to_path_buf(),
+        let image_paths = vec![
+            Path::new("title.png").to_path_buf(),
+            Path::new("caption.png").to_path_buf(),
         ];
         let plan = build_render_plan(
             &request,
             &HashSet::new(),
-            &text_paths,
+            &image_paths,
             Path::new("out.partial.mp4"),
         )
         .unwrap();
         assert!(plan
             .filter_graph
-            .contains("[3:a]atrim=duration=5,asetpts=PTS-STARTPTS[audio_out]"));
+            .contains("[5:a]atrim=duration=5,asetpts=PTS-STARTPTS[audio_out]"));
         assert!(plan
             .args
             .iter()
             .any(|argument| argument == "anullsrc=channel_layout=stereo:sample_rate=48000"));
         assert!(
             temporary_export_path(Path::new("/tmp/movie.mp4")).ends_with(".movie.mp4.partial.mp4")
-        );
-    }
-
-    #[test]
-    fn overlay_text_files_escape_filter_path_characters() {
-        assert_eq!(
-            ffmpeg_filter_path(Path::new("/tmp/Nour: creator's cut.txt")),
-            "/tmp/Nour\\: creator\\'s cut.txt"
         );
     }
 
@@ -968,10 +989,8 @@ mod tests {
         let music = directory.join("music.wav");
         let silent = directory.join("silent.mp4");
         let output = directory.join("output.partial.mp4");
-        let title = directory.join("title.txt");
-        let caption = directory.join("caption.txt");
-        fs::write(&title, "Nour: creator's cut").unwrap();
-        fs::write(&caption, "Second line").unwrap();
+        let title = directory.join("title.png");
+        let caption = directory.join("caption.png");
 
         let generated = [
             Command::new(&ffmpeg)
@@ -1028,8 +1047,24 @@ mod tests {
                 .arg(&silent)
                 .status()
                 .unwrap(),
+            Command::new(&ffmpeg)
+                .args([
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=white@0.5:s=320x60:d=1,format=rgba",
+                    "-frames:v",
+                    "1",
+                ])
+                .arg(&title)
+                .status()
+                .unwrap(),
         ];
         assert!(generated.iter().all(|status| status.success()));
+        fs::copy(&title, &caption).unwrap();
 
         let request = render_request([
             interview.to_str().unwrap(),
