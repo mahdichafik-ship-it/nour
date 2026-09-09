@@ -141,6 +141,13 @@ jobs:
           "$probe" -version | head -n 1
           file "$sidecar" | grep -Eiq '${{ matrix.runner_architecture }}|Mach-O'
 
+      - name: Render and inspect generated media with bundled sidecars
+        working-directory: artifacts/nour-studio
+        env:
+          NOUR_FFMPEG_TEST_BINARY: ${{ github.workspace }}/artifacts/nour-studio/src-tauri/binaries/ffmpeg-${{ matrix.rust_target }}
+          NOUR_FFPROBE_TEST_BINARY: ${{ github.workspace }}/artifacts/nour-studio/src-tauri/binaries/ffprobe-${{ matrix.rust_target }}
+        run: cargo test --manifest-path src-tauri/Cargo.toml tests::generated_media_renders_to_a_playable_mp4 -- --exact
+
       - name: Build, sign, notarize, and bundle
         working-directory: artifacts/nour-studio
         env:

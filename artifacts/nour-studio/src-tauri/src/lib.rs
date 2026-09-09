@@ -1,15 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs,
     fs::{File, OpenOptions},
     io,
-    path::Path,
-    process::Command,
+    path::{Path, PathBuf},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{path::BaseDirectory, Manager};
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_shell::ShellExt;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -161,233 +162,294 @@ fn validate_export(request: &ExportRequest) -> Result<(), String> {
     Ok(())
 }
 
-fn ffmpeg_filter_text(text: &str) -> String {
-    text.replace('\\', "\\\\")
+fn ffmpeg_filter_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
         .replace(':', "\\:")
         .replace('\'', "\\'")
-        .replace('\n', "\\n")
 }
 
-fn bundled_ffmpeg_name() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        #[cfg(target_arch = "aarch64")]
-        {
-            return "binaries/ffmpeg-aarch64-apple-darwin";
-        }
-        #[cfg(target_arch = "x86_64")]
-        {
-            return "binaries/ffmpeg-x86_64-apple-darwin";
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        return "binaries/ffmpeg-x86_64-unknown-linux-gnu";
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        "binaries/ffmpeg"
-    }
+fn temporary_export_path(output: &Path) -> PathBuf {
+    let name = output
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("nour-export.mp4");
+    output.with_file_name(format!(".{name}.partial.mp4"))
 }
 
-fn bundled_ffprobe_name() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        #[cfg(target_arch = "aarch64")]
-        {
-            return "binaries/ffprobe-aarch64-apple-darwin";
+#[derive(Debug)]
+struct RenderPlan {
+    filter_graph: String,
+    args: Vec<String>,
+    timeline_duration: f64,
+}
+
+fn build_render_plan(
+    request: &ExportRequest,
+    audio_input_indices: &HashSet<usize>,
+    overlay_text_paths: &[PathBuf],
+    temporary: &Path,
+) -> Result<RenderPlan, String> {
+    if overlay_text_paths.len() != request.overlays.len() {
+        return Err("Text overlay files could not be prepared.".into());
+    }
+    let (width, height) = request
+        .resolution
+        .split_once('x')
+        .ok_or_else(|| "Export resolution is invalid.".to_string())?;
+    let timeline_duration = request
+        .clips
+        .iter()
+        .map(|clip| clip.start + clip.duration)
+        .fold(0.0, f64::max);
+    let mut args = vec![
+        "-y".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-nostats".into(),
+    ];
+    let mut video_clips = Vec::new();
+    let mut audio_clips = Vec::new();
+
+    for (input_index, clip) in request.clips.iter().enumerate() {
+        let asset = request
+            .assets
+            .iter()
+            .find(|asset| asset.id == clip.asset_id)
+            .ok_or_else(|| "A timeline clip refers to a missing media asset.".to_string())?;
+        let path = asset
+            .native_path
+            .as_deref()
+            .ok_or_else(|| format!("Media asset {} is not available on disk.", asset.id))?;
+        if asset.kind == "image" {
+            args.extend(["-loop".into(), "1".into()]);
         }
-        #[cfg(target_arch = "x86_64")]
-        {
-            return "binaries/ffprobe-x86_64-apple-darwin";
+        args.extend(["-i".into(), path.into()]);
+        if clip.track == "video" {
+            video_clips.push((input_index, clip, asset));
+        }
+        if audio_input_indices.contains(&input_index) {
+            audio_clips.push((input_index, clip));
         }
     }
-    #[cfg(target_os = "linux")]
-    {
-        return "binaries/ffprobe-x86_64-unknown-linux-gnu";
+    if video_clips.is_empty() {
+        return Err("A video or image clip is required for MP4 export.".into());
     }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        "binaries/ffprobe"
+
+    let mut graph = format!(
+        "color=c=black:s={width}x{height}:r={}:d={timeline_duration}[base];",
+        request.frame_rate
+    );
+    let mut current_video = "base".to_string();
+    for (index, (input, clip, asset)) in video_clips.iter().enumerate() {
+        let adjustments = asset.adjustments.as_ref();
+        let exposure = adjustments.map(|value| value.exposure).unwrap_or(1.0);
+        let contrast = adjustments.map(|value| value.contrast).unwrap_or(1.0);
+        let saturation = adjustments.map(|value| value.saturation).unwrap_or(1.0);
+        let clip_label = format!("v{index}");
+        let next_label = format!("vg{index}");
+        graph.push_str(&format!(
+            "[{input}:v]trim=start={}:duration={},setpts=PTS-STARTPTS+{}/TB,scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,eq=brightness={}:contrast={}:saturation={}[{clip_label}];[{current_video}][{clip_label}]overlay=shortest=0:eof_action=pass:enable='between(t,{},{})'[{next_label}];",
+            clip.trim_start,
+            clip.duration,
+            clip.start,
+            (exposure - 1.0) * 0.5,
+            contrast,
+            saturation,
+            clip.start,
+            clip.start + clip.duration
+        ));
+        current_video = next_label;
     }
+    for (index, (overlay, text_path)) in request.overlays.iter().zip(overlay_text_paths).enumerate()
+    {
+        let position = match overlay.position.as_str() {
+            "top" => "x=(w-text_w)/2:y=h*0.09",
+            "center" => "x=(w-text_w)/2:y=(h-text_h)/2",
+            _ => "x=(w-text_w)/2:y=h*0.86",
+        };
+        let next_label = format!("text{index}");
+        graph.push_str(&format!(
+            "[{current_video}]drawtext=textfile='{}':reload=0:expansion=none:fontsize=h/18:fontcolor=white:borderw=3:bordercolor=black:{position}:enable='between(t,{},{})'[{next_label}];",
+            ffmpeg_filter_path(text_path),
+            overlay.start,
+            overlay.start + overlay.duration
+        ));
+        current_video = next_label;
+    }
+    graph.push_str(&format!("[{current_video}]null[video_out];"));
+
+    if audio_clips.is_empty() {
+        let silent_input = request.clips.len();
+        args.extend([
+            "-f".into(),
+            "lavfi".into(),
+            "-i".into(),
+            "anullsrc=channel_layout=stereo:sample_rate=48000".into(),
+        ]);
+        graph.push_str(&format!(
+            "[{silent_input}:a]atrim=duration={timeline_duration},asetpts=PTS-STARTPTS[audio_out]"
+        ));
+    } else {
+        for (index, (input, clip)) in audio_clips.iter().enumerate() {
+            graph.push_str(&format!(
+                "[{input}:a]atrim=start={}:duration={},asetpts=PTS-STARTPTS,adelay={}ms:all=1,volume={}[a{index}];",
+                clip.trim_start,
+                clip.duration,
+                (clip.start * 1000.0).round() as u64,
+                clip.volume
+            ));
+        }
+        let inputs = (0..audio_clips.len())
+            .map(|index| format!("[a{index}]"))
+            .collect::<String>();
+        graph.push_str(&format!(
+            "{inputs}amix=inputs={}:duration=longest:dropout_transition=0,apad=whole_dur={timeline_duration}[audio_out]",
+            audio_clips.len()
+        ));
+    }
+    args.extend([
+        "-filter_complex".into(),
+        graph.clone(),
+        "-map".into(),
+        "[video_out]".into(),
+        "-map".into(),
+        "[audio_out]".into(),
+        "-c:v".into(),
+        "libx264".into(),
+        "-pix_fmt".into(),
+        "yuv420p".into(),
+        "-r".into(),
+        request.frame_rate.to_string(),
+        "-c:a".into(),
+        "aac".into(),
+        "-movflags".into(),
+        "+faststart".into(),
+        "-t".into(),
+        timeline_duration.to_string(),
+        "-f".into(),
+        "mp4".into(),
+        temporary.to_string_lossy().into_owned(),
+    ]);
+    Ok(RenderPlan {
+        filter_graph: graph,
+        args,
+        timeline_duration,
+    })
 }
 
 #[tauri::command]
-fn export_video(app: tauri::AppHandle, request: String) -> Result<String, String> {
+async fn export_video(app: tauri::AppHandle, request: String) -> Result<String, String> {
     let request: ExportRequest =
         serde_json::from_str(&request).map_err(|e| format!("Invalid export request: {e}"))?;
     validate_export(&request)?;
-    let _project_name = &request.project_name;
     let output = app
         .dialog()
         .file()
+        .set_file_name(format!("{}.mp4", safe_project_name(&request.project_name)))
         .add_filter("MP4 video", &["mp4"])
         .blocking_save_file()
         .ok_or_else(|| "Export cancelled.".to_string())?;
-    let output = output
+    let mut output = output
         .as_path()
         .ok_or_else(|| "The selected export path is unavailable.".to_string())?
         .to_path_buf();
+    if output.extension().and_then(|value| value.to_str()) != Some("mp4") {
+        output.set_extension("mp4");
+    }
     let parent = output
         .parent()
         .ok_or_else(|| "The selected export path has no parent directory.".to_string())?;
-    let stem = output
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("nour-export.mp4");
-    let temporary = parent.join(format!(".{stem}.partial.mp4"));
-    let ffmpeg = app
-        .path()
-        .resolve(bundled_ffmpeg_name(), BaseDirectory::Resource)
-        .map_err(|e| format!("Bundled FFmpeg is unavailable: {e}"))?;
-    let mut command = Command::new(ffmpeg);
-    command.args(["-y", "-loglevel", "error", "-nostats"]);
-    let mut video_clips = Vec::new();
-    let mut audio_clips = Vec::new();
+    if !parent.is_dir() {
+        return Err("The selected export directory is unavailable.".into());
+    }
+    let output_absolute = parent
+        .canonicalize()
+        .map_err(|_| "The selected export directory is unavailable.".to_string())?
+        .join(output.file_name().unwrap_or_default());
+    for asset in &request.assets {
+        if let Some(path) = &asset.native_path {
+            if Path::new(path).canonicalize().ok().as_ref() == Some(&output_absolute) {
+                return Err("The export cannot overwrite source media.".into());
+            }
+        }
+    }
+    let temporary = temporary_export_path(&output);
+    let _ = fs::remove_file(&temporary);
+    let overlay_prefix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| "System clock is unavailable.".to_string())?
+        .as_nanos();
+    let overlay_text_paths = request
+        .overlays
+        .iter()
+        .enumerate()
+        .map(|(index, overlay)| {
+            let path = std::env::temp_dir().join(format!(
+                "nour-overlay-{}-{overlay_prefix}-{index}.txt",
+                std::process::id()
+            ));
+            fs::write(&path, &overlay.text)
+                .map_err(|_| "Could not prepare title or caption text.".to_string())?;
+            Ok(path)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut audio_input_indices = HashSet::new();
     for (input_index, clip) in request.clips.iter().enumerate() {
         let asset = request
             .assets
             .iter()
             .find(|a| a.id == clip.asset_id)
             .unwrap();
-        let path = asset
-            .native_path
-            .as_deref()
-            .ok_or_else(|| format!("Media asset {} is not available on disk.", asset.id))?;
-        if asset.kind == "image" {
-            command.args(["-loop", "1"]);
+        let track_is_muted = (clip.track == "video" && request.track_muted.video)
+            || (clip.track == "audio" && request.track_muted.audio);
+        if clip.muted || clip.volume == 0.0 || track_is_muted || asset.kind == "image" {
+            continue;
         }
-        command.args(["-i", path]);
-        if clip.track == "video" {
-            video_clips.push((input_index, clip, asset));
-            // Video clips may carry production audio. Probe rather than assuming
-            // one exists so silent video and still images remain valid.
-            if asset.kind == "video" {
-                let probe = app
-                    .path()
-                    .resolve(bundled_ffprobe_name(), BaseDirectory::Resource)
-                    .map_err(|e| format!("Bundled FFprobe is unavailable: {e}"))?;
-                let has_audio = Command::new(probe)
-                    .args([
-                        "-v",
-                        "error",
-                        "-select_streams",
-                        "a:0",
-                        "-show_entries",
-                        "stream=index",
-                        "-of",
-                        "csv=p=0",
-                        asset.native_path.as_deref().unwrap(),
-                    ])
-                    .output()
-                    .map(|o| o.status.success() && !o.stdout.is_empty())
-                    .unwrap_or(false);
-                if has_audio {
-                    audio_clips.push((input_index, clip, asset));
-                }
-            }
-        } else {
-            audio_clips.push((input_index, clip, asset));
+        if asset.kind == "audio" {
+            audio_input_indices.insert(input_index);
+            continue;
+        }
+        let probe = app
+            .shell()
+            .sidecar("binaries/ffprobe")
+            .map_err(|error| format!("Bundled FFprobe is unavailable: {error}"))?
+            .args([
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=index",
+                "-of",
+                "csv=p=0",
+                asset.native_path.as_deref().unwrap_or_default(),
+            ])
+            .output()
+            .await
+            .map_err(|error| format!("Could not inspect media audio: {error}"))?;
+        if probe.status.success() && !probe.stdout.is_empty() {
+            audio_input_indices.insert(input_index);
         }
     }
-    if video_clips.is_empty() {
-        return Err("A video or image clip is required for MP4 export.".into());
-    }
-    let (width, height) = request.resolution.split_once('x').unwrap();
-    let timeline_duration = request
-        .clips
-        .iter()
-        .map(|c| c.start + c.duration)
-        .fold(0.0, f64::max);
-    let mut graph = format!(
-        "color=c=black:s={width}x{height}:r={}[base];",
-        request.frame_rate
-    );
-    let mut current = "base".to_string();
-    for (i, (input, clip, asset)) in video_clips.iter().enumerate() {
-        let adj = asset.adjustments.as_ref();
-        let exposure = adj.map(|a| a.exposure).unwrap_or(1.0);
-        let contrast = adj.map(|a| a.contrast).unwrap_or(1.0);
-        let saturation = adj.map(|a| a.saturation).unwrap_or(1.0);
-        let next = format!("vg{i}");
-        graph.push_str(&format!("[{input}:v]trim=start={}:duration={},setpts=PTS-STARTPTS+{}/TB,scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,eq=brightness={}:contrast={}:saturation={}[v{i}];[{current}][v{i}]overlay=shortest=0:eof_action=pass:enable='between(t,{}, {})'[{next}];", clip.trim_start, clip.duration, clip.start, (exposure - 1.0) * 0.5, contrast, saturation, clip.start, clip.start + clip.duration));
-        current = next;
-    }
-    graph.push_str(&format!("[{current}]null[vout];"));
-    if !request.overlays.is_empty() {
-        let mut overlay_input = "vout".to_string();
-        for (i, overlay) in request.overlays.iter().enumerate() {
-            let position = match overlay.position.as_str() {
-                "top" => "x=(w-text_w)/2:y=h*0.09",
-                "center" => "x=(w-text_w)/2:y=(h-text_h)/2",
-                _ => "x=(w-text_w)/2:y=h*0.86",
-            };
-            let next = format!("vo{i}");
-            graph.push_str(&format!("[{}]drawtext=text='{}':fontsize=h/18:fontcolor=white:borderw=3:bordercolor=black:{position}:enable='between(t,{},{})'[{next}];", overlay_input, ffmpeg_filter_text(&overlay.text), overlay.start, overlay.start + overlay.duration));
-            overlay_input = next;
-        }
-        graph.push_str(&format!("[{overlay_input}]overlayout"));
-    }
-    let map_video = if request.overlays.is_empty() {
-        "[vout]"
-    } else {
-        "[overlayout]"
-    };
-    let audio_map;
-    if audio_clips.is_empty() {
-        command.args([
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=channel_layout=stereo:sample_rate=48000",
-            "-shortest",
-        ]);
-        audio_map = Some("[silent]");
-        graph.push_str(&format!(";[{}:a]anull[silent]", request.clips.len()));
-    } else {
-        let mut audio_graph = String::new();
-        for (i, (input, clip, _)) in audio_clips.iter().enumerate() {
-            audio_graph.push_str(&format!(
-                "[{input}:a]atrim=start={}:duration={},asetpts=PTS-STARTPTS,adelay={}ms:all=1,volume={}[a{i}];",
-                clip.trim_start,
-                clip.duration,
-                (clip.start * 1000.0) as u64,
-                if clip.muted || (clip.track == "video" && request.track_muted.video) || (clip.track == "audio" && request.track_muted.audio) { 0.0 } else { clip.volume }
-            ));
-        }
-        let inputs: String = (0..audio_clips.len()).map(|i| format!("[a{i}]")).collect();
-        audio_graph.push_str(&format!(
-            "{inputs}amix=inputs={}:duration=longest:dropout_transition=0[aout]",
-            audio_clips.len()
-        ));
-        graph.push(';');
-        graph.push_str(&audio_graph);
-        audio_map = Some("[aout]");
-    }
-    command.args(["-filter_complex", &graph, "-map", map_video]);
-    if let Some(map) = audio_map {
-        command.args(["-map", map]);
-    }
-    command.args([
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-r",
-        &request.frame_rate.to_string(),
-        "-c:a",
-        "aac",
-        "-movflags",
-        "+faststart",
-        "-t",
-        &timeline_duration.to_string(),
-        "-f",
-        "mp4",
-        temporary.to_str().unwrap(),
-    ]);
-    let result = command
+    let plan = build_render_plan(
+        &request,
+        &audio_input_indices,
+        &overlay_text_paths,
+        &temporary,
+    )?;
+    let _ = (&plan.filter_graph, plan.timeline_duration);
+    let result = app
+        .shell()
+        .sidecar("binaries/ffmpeg")
+        .map_err(|error| format!("Bundled FFmpeg is unavailable: {error}"))?
+        .args(plan.args)
         .output()
-        .map_err(|e| format!("Could not start bundled FFmpeg: {e}"))?;
+        .await
+        .map_err(|error| format!("Could not start bundled FFmpeg: {error}"))?;
+    for path in &overlay_text_paths {
+        let _ = fs::remove_file(path);
+    }
     if !result.status.success() {
         let _ = fs::remove_file(&temporary);
         return Err(format!(
@@ -399,8 +461,10 @@ fn export_video(app: tauri::AppHandle, request: String) -> Result<String, String
                 .collect::<String>()
         ));
     }
-    fs::rename(&temporary, &output)
-        .map_err(|e| format!("Could not finalize the rendered video: {e}"))?;
+    if let Err(error) = fs::rename(&temporary, &output) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("Could not finalize the rendered video: {error}"));
+    }
     Ok(output.display().to_string())
 }
 
@@ -652,10 +716,107 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        media_extension, safe_project_name, source_file_name, validate_export, ExportClip,
-        ExportOverlay, ExportRequest, TrackMuted,
+        build_render_plan, ffmpeg_filter_path, media_extension, safe_project_name,
+        source_file_name, temporary_export_path, validate_export, Adjustments, ExportAsset,
+        ExportClip, ExportOverlay, ExportRequest, TrackMuted,
     };
-    use std::path::Path;
+    use std::{
+        collections::HashSet,
+        fs,
+        path::Path,
+        process::Command,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn ffmpeg_test_binary() -> String {
+        std::env::var("NOUR_FFMPEG_TEST_BINARY").unwrap_or_else(|_| "ffmpeg".into())
+    }
+
+    fn ffprobe_test_binary() -> String {
+        std::env::var("NOUR_FFPROBE_TEST_BINARY").unwrap_or_else(|_| "ffprobe".into())
+    }
+
+    fn render_request(paths: [&str; 3]) -> ExportRequest {
+        ExportRequest {
+            project_name: "test".into(),
+            resolution: "1280x720".into(),
+            frame_rate: 24,
+            assets: vec![
+                ExportAsset {
+                    id: "interview".into(),
+                    kind: "video".into(),
+                    native_path: Some(paths[0].into()),
+                    duration: 2.0,
+                    adjustments: Some(Adjustments {
+                        exposure: 1.1,
+                        contrast: 1.2,
+                        saturation: 0.9,
+                    }),
+                },
+                ExportAsset {
+                    id: "music".into(),
+                    kind: "audio".into(),
+                    native_path: Some(paths[1].into()),
+                    duration: 2.0,
+                    adjustments: None,
+                },
+                ExportAsset {
+                    id: "silent".into(),
+                    kind: "video".into(),
+                    native_path: Some(paths[2].into()),
+                    duration: 2.0,
+                    adjustments: None,
+                },
+            ],
+            clips: vec![
+                ExportClip {
+                    asset_id: "interview".into(),
+                    track: "video".into(),
+                    start: 1.0,
+                    trim_start: 0.25,
+                    duration: 1.0,
+                    volume: 0.8,
+                    muted: false,
+                },
+                ExportClip {
+                    asset_id: "music".into(),
+                    track: "audio".into(),
+                    start: 2.0,
+                    trim_start: 0.0,
+                    duration: 1.0,
+                    volume: 0.5,
+                    muted: false,
+                },
+                ExportClip {
+                    asset_id: "silent".into(),
+                    track: "video".into(),
+                    start: 4.0,
+                    trim_start: 0.0,
+                    duration: 1.0,
+                    volume: 1.0,
+                    muted: false,
+                },
+            ],
+            overlays: vec![
+                ExportOverlay {
+                    text: "Nour: creator's cut".into(),
+                    start: 1.0,
+                    duration: 1.0,
+                    position: "top".into(),
+                },
+                ExportOverlay {
+                    text: "Second line".into(),
+                    start: 4.0,
+                    duration: 0.5,
+                    position: "bottom".into(),
+                },
+            ],
+            track_muted: TrackMuted {
+                video: false,
+                audio: false,
+            },
+        }
+    }
 
     #[test]
     fn creates_safe_project_file_names() {
@@ -711,5 +872,192 @@ mod tests {
             },
         };
         assert!(validate_export(&request).is_err());
+    }
+
+    #[test]
+    fn render_plan_preserves_timeline_audio_and_overlay_semantics() {
+        let request = render_request(["/tmp/interview.mp4", "/tmp/music.wav", "/tmp/silent.mp4"]);
+        let audio_inputs = HashSet::from([0, 1]);
+        let output = Path::new("/tmp/.nour-test.partial.mp4");
+        let text_paths = vec![
+            Path::new("/tmp/nour-title.txt").to_path_buf(),
+            Path::new("/tmp/nour-caption.txt").to_path_buf(),
+        ];
+        let plan = build_render_plan(&request, &audio_inputs, &text_paths, output).unwrap();
+
+        assert_eq!(plan.timeline_duration, 5.0);
+        assert!(plan.filter_graph.contains("d=5[base]"));
+        assert!(plan
+            .filter_graph
+            .contains("[0:v]trim=start=0.25:duration=1"));
+        assert!(plan.filter_graph.contains("PTS-STARTPTS+1/TB"));
+        assert!(plan.filter_graph.contains("[base][v0]overlay"));
+        assert!(plan.filter_graph.contains("[vg0][v1]overlay"));
+        assert!(plan
+            .filter_graph
+            .contains("[0:a]atrim=start=0.25:duration=1"));
+        assert!(plan.filter_graph.contains("adelay=1000ms:all=1,volume=0.8"));
+        assert!(plan.filter_graph.contains("[1:a]atrim=start=0:duration=1"));
+        assert!(plan.filter_graph.contains("adelay=2000ms:all=1,volume=0.5"));
+        assert!(plan.filter_graph.contains("[text0]drawtext"));
+        assert!(plan.filter_graph.contains("[text1]null[video_out]"));
+        assert!(plan.filter_graph.contains("textfile='/tmp/nour-title.txt'"));
+        assert_eq!(plan.args.last().unwrap(), "/tmp/.nour-test.partial.mp4");
+        let inputs = plan
+            .args
+            .windows(2)
+            .filter(|pair| pair[0] == "-i")
+            .map(|pair| pair[1].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            inputs,
+            vec!["/tmp/interview.mp4", "/tmp/music.wav", "/tmp/silent.mp4"]
+        );
+    }
+
+    #[test]
+    fn muted_tracks_can_fall_back_to_timeline_length_silence() {
+        let request = render_request(["video.mp4", "music.wav", "silent.mp4"]);
+        let text_paths = vec![
+            Path::new("title.txt").to_path_buf(),
+            Path::new("caption.txt").to_path_buf(),
+        ];
+        let plan = build_render_plan(
+            &request,
+            &HashSet::new(),
+            &text_paths,
+            Path::new("out.partial.mp4"),
+        )
+        .unwrap();
+        assert!(plan
+            .filter_graph
+            .contains("[3:a]atrim=duration=5,asetpts=PTS-STARTPTS[audio_out]"));
+        assert!(plan
+            .args
+            .iter()
+            .any(|argument| argument == "anullsrc=channel_layout=stereo:sample_rate=48000"));
+        assert!(
+            temporary_export_path(Path::new("/tmp/movie.mp4")).ends_with(".movie.mp4.partial.mp4")
+        );
+    }
+
+    #[test]
+    fn overlay_text_files_escape_filter_path_characters() {
+        assert_eq!(
+            ffmpeg_filter_path(Path::new("/tmp/Nour: creator's cut.txt")),
+            "/tmp/Nour\\: creator\\'s cut.txt"
+        );
+    }
+
+    #[test]
+    fn generated_media_renders_to_a_playable_mp4() {
+        let ffmpeg = ffmpeg_test_binary();
+        let ffprobe = ffprobe_test_binary();
+        if Command::new(&ffmpeg).arg("-version").output().is_err()
+            || Command::new(&ffprobe).arg("-version").output().is_err()
+        {
+            return;
+        }
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!("nour-render-{unique}"));
+        fs::create_dir_all(&directory).unwrap();
+        let interview = directory.join("interview.mp4");
+        let music = directory.join("music.wav");
+        let silent = directory.join("silent.mp4");
+        let output = directory.join("output.partial.mp4");
+        let title = directory.join("title.txt");
+        let caption = directory.join("caption.txt");
+        fs::write(&title, "Nour: creator's cut").unwrap();
+        fs::write(&caption, "Second line").unwrap();
+
+        let generated = [
+            Command::new(&ffmpeg)
+                .args([
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=blue:s=320x180:r=24:d=2",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=440:duration=2",
+                    "-shortest",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                ])
+                .arg(&interview)
+                .status()
+                .unwrap(),
+            Command::new(&ffmpeg)
+                .args([
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "sine=frequency=660:duration=2",
+                ])
+                .arg(&music)
+                .status()
+                .unwrap(),
+            Command::new(&ffmpeg)
+                .args([
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=red:s=320x180:r=24:d=2",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                ])
+                .arg(&silent)
+                .status()
+                .unwrap(),
+        ];
+        assert!(generated.iter().all(|status| status.success()));
+
+        let request = render_request([
+            interview.to_str().unwrap(),
+            music.to_str().unwrap(),
+            silent.to_str().unwrap(),
+        ]);
+        let plan = build_render_plan(&request, &HashSet::from([0, 1]), &[title, caption], &output)
+            .unwrap();
+        let status = Command::new(&ffmpeg).args(&plan.args).status().unwrap();
+        assert!(status.success());
+        assert!(output.metadata().unwrap().len() > 0);
+
+        let probe = Command::new(&ffprobe)
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&output)
+            .output()
+            .unwrap();
+        let streams = String::from_utf8_lossy(&probe.stdout);
+        assert!(probe.status.success());
+        assert!(streams.contains("video"));
+        assert!(streams.contains("audio"));
+        let _ = fs::remove_dir_all(directory);
     }
 }

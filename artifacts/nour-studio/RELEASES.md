@@ -1,7 +1,7 @@
 # Nour release contract
 
 **Status:** authoritative product contract for Nour 1.0 and Nour 2.0  
-**Evidence snapshot:** this repository, package version `0.1.4` (not a claim that
+**Evidence snapshot:** this repository, package version `0.1.5` (not a claim that
 either contract has shipped).
 
 This document is the release gate. A feature is not “done” because a control,
