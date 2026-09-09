@@ -29,6 +29,7 @@ export type MediaAsset = {
   height?: number;
   size?: number;
   nativePath?: string;
+  demo?: boolean;
   error?: string;
   adjustments?: Adjustments;
 };
@@ -49,6 +50,7 @@ export type EditorController = {
   projectSettings: ProjectSettings;
   hasProject: boolean;
   createProject: (name: string, settings: ProjectSettings) => void;
+  createSampleProject: (settings: ProjectSettings) => void;
   assets: MediaAsset[];
   clips: TimelineClip[];
   selectedAssetId: string | null;

@@ -15,10 +15,11 @@ type Props = {
   initialSettings: ProjectSettings;
   canCancel: boolean;
   onCreate: (name: string, settings: ProjectSettings) => void;
+  onCreateSample: () => void;
   onClose: () => void;
 };
 
-export function ProjectCreationDialog({ initialName, initialSettings, canCancel, onCreate, onClose }: Props) {
+export function ProjectCreationDialog({ initialName, initialSettings, canCancel, onCreate, onCreateSample, onClose }: Props) {
   const [name, setName] = useState(initialName === 'Untitled project' ? '' : initialName);
   const [settings, setSettings] = useState<ProjectSettings>({ ...DEFAULT_PROJECT_SETTINGS, ...initialSettings });
   const selectedType = projectTypes.find(type => type.value === settings.type) ?? projectTypes[4];
@@ -87,6 +88,7 @@ export function ProjectCreationDialog({ initialName, initialSettings, canCancel,
 
         <div className="project-dialog-actions">
           {canCancel && <button className="project-secondary" type="button" onClick={onClose}>Cancel</button>}
+          <button className="project-secondary sample-project-button" type="button" onClick={onCreateSample}>Open sample project</button>
           <button className="project-primary" type="button" disabled={!name.trim()} onClick={() => onCreate(name, settings)}>Create project</button>
         </div>
       </section>

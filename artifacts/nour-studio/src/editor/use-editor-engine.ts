@@ -22,6 +22,9 @@ const fileKind = (name: string, type = ''): MediaKind | null => {
 const id = () => crypto.randomUUID();
 const finite = (n: number, fallback = 0) => Number.isFinite(n) ? n : fallback;
 const normalizeProjectSettings = (value?: Partial<ProjectSettings>): ProjectSettings => ({ ...DEFAULT_PROJECT_SETTINGS, ...value });
+const DEMO_ASSET_ID = 'nour-demo-frame';
+const DEMO_ASSET_SRC = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#182a2c"/><stop offset="0.52" stop-color="#295050"/><stop offset="1" stop-color="#d49a62"/></linearGradient><linearGradient id="sun" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f5d6a0"/><stop offset="1" stop-color="#d0744d"/></linearGradient></defs><rect width="1920" height="1080" fill="url(#bg)"/><circle cx="1510" cy="260" r="170" fill="url(#sun)" opacity=".92"/><path d="M0 790 360 470l260 230 300-360 420 450 240-220 340 330v180H0Z" fill="#102223" opacity=".9"/><path d="M0 875h1920" stroke="#f4d39c" stroke-width="4" opacity=".7"/><text x="120" y="150" fill="#fff4df" font-family="Arial,sans-serif" font-size="34" letter-spacing="8">NOUR / FIRST CUT</text><text x="120" y="955" fill="#fff4df" font-family="Arial,sans-serif" font-size="72" font-weight="700">A SIMPLE STORY</text><text x="124" y="1008" fill="#f4d39c" font-family="Arial,sans-serif" font-size="24" letter-spacing="4">SAMPLE PROJECT · READY TO EDIT</text></svg>`)}`;
+const demoAsset = (): MediaAsset => ({ id: DEMO_ASSET_ID, name: 'Nour sample frame.svg', kind: 'image', src: DEMO_ASSET_SRC, duration: 6, width: 1920, height: 1080, demo: true });
 export function hasTrackOverlap(clips: TimelineClip[], candidate: TimelineClip): boolean {
   const end = candidate.start + candidate.duration;
   return clips.some(clip => clip.id !== candidate.id && clip.track === candidate.track && candidate.start < clip.start + clip.duration && end > clip.start);
@@ -146,7 +149,8 @@ export function useEditorEngine(): EditorController {
         const restored = await Promise.all((data.assets || []).map(async asset => {
           let src = '';
           if (asset.nativePath) src = nativeWindow().__TAURI__?.core?.convertFileSrc?.(asset.nativePath) ?? '';
-          else { const blob = await blobGet(asset.id); if (blob) { src = URL.createObjectURL(blob); urls.current.add(src); } }
+           else if (asset.demo) src = DEMO_ASSET_SRC;
+           else { const blob = await blobGet(asset.id); if (blob) { src = URL.createObjectURL(blob); urls.current.add(src); } }
           return { ...asset, src, error: src ? asset.error : 'Media file is unavailable locally.' };
         }));
         restoredSuccessfully = true;
@@ -262,7 +266,30 @@ export function useEditorEngine(): EditorController {
     setSaveStatus('saving');
     setError(null);
   }, [pauseReset]);
+  const createSampleProject = useCallback((settings: ProjectSettings) => {
+    const asset = demoAsset();
+    const clip: TimelineClip = { id: 'nour-demo-clip', assetId: asset.id, track: 'video', start: 0, trimStart: 0, duration: asset.duration, volume: 1, muted: false };
+    ready.current = true;
+    pauseReset();
+    assetsRef.current.forEach(a => { if (a.src.startsWith('blob:')) { URL.revokeObjectURL(a.src); urls.current.delete(a.src); } });
+    assetsRef.current = [asset];
+    clipsRef.current = [clip];
+    selectedRef.current = asset.id;
+    modeRef.current = 'timeline';
+    setProjectName('Nour first cut');
+    setProjectSettings(settings);
+    setHasProject(true);
+    setAssets([asset]);
+    setClips([clip]);
+    setSelectedAssetId(asset.id);
+    setSelectedClipId(clip.id);
+    setTrackMuted({ video: false, audio: false });
+    setModeState('timeline');
+    durationRef.current = asset.duration;
+    setSaveStatus('saving');
+    setError(null);
+  }, [pauseReset]);
   const exportProject = useCallback(() => { const data: StoredProject = { projectName, projectSettings, assets: assets.map(({ src, ...a }) => a), clips, trackMuted }; const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })); a.download = `${projectName || 'project'}.nour.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 0); }, [projectName, projectSettings, assets, clips, trackMuted]);
 
-  return { projectName, setProjectName: name => { if (ready.current) setProjectName(name); }, projectSettings, hasProject, createProject, assets, clips, selectedAssetId, selectedClipId, selectAsset, selectClip, mode, setMode, currentTime, seek, previewSeek, commitSeek, playing, togglePlay: () => { if (!ready.current) return; if (!playbackDuration) { reportError('Select supported media or add a clip before playing.'); return; } if (currentTime >= playbackDuration) { timeRef.current = 0; setCurrentTime(0); setSeekRevision(value => value + 1); } setPlaying(p => !p); }, playbackReady, buffering, setPlaybackReady, setMediaClockActive, syncPlaybackTime, seekRevision, duration, playbackDuration, volume, setVolume: v => setVolume(Math.min(1, Math.max(0, v))), muted, setMuted, trackMuted, toggleTrackMute: track => setTrackMuted(m => ({ ...m, [track]: !m[track] })), addToTimeline, moveClip, updateClip, removeClip, removeAsset, updateAssetAdjustments, resetAssetAdjustments, importFiles, importNative, importing, isNative: native, error, reportError, clearError: () => setError(null), saveStatus, exportProject };
+  return { projectName, setProjectName: name => { if (ready.current) setProjectName(name); }, projectSettings, hasProject, createProject, createSampleProject, assets, clips, selectedAssetId, selectedClipId, selectAsset, selectClip, mode, setMode, currentTime, seek, previewSeek, commitSeek, playing, togglePlay: () => { if (!ready.current) return; if (!playbackDuration) { reportError('Select supported media or add a clip before playing.'); return; } if (currentTime >= playbackDuration) { timeRef.current = 0; setCurrentTime(0); setSeekRevision(value => value + 1); } setPlaying(p => !p); }, playbackReady, buffering, setPlaybackReady, setMediaClockActive, syncPlaybackTime, seekRevision, duration, playbackDuration, volume, setVolume: v => setVolume(Math.min(1, Math.max(0, v))), muted, setMuted, trackMuted, toggleTrackMute: track => setTrackMuted(m => ({ ...m, [track]: !m[track] })), addToTimeline, moveClip, updateClip, removeClip, removeAsset, updateAssetAdjustments, resetAssetAdjustments, importFiles, importNative, importing, isNative: native, error, reportError, clearError: () => setError(null), saveStatus, exportProject };
 }

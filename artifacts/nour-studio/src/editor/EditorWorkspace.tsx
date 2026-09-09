@@ -146,6 +146,10 @@ export default function EditorWorkspace() {
           initialSettings={editor.projectSettings}
           canCancel={editor.hasProject}
           onClose={() => setIsProjectDialogOpen(false)}
+          onCreateSample={() => {
+            editor.createSampleProject({ ...editor.projectSettings, type: 'documentary' });
+            setIsProjectDialogOpen(false);
+          }}
           onCreate={(name, settings) => {
             editor.createProject(name, settings);
             setIsProjectDialogOpen(false);
