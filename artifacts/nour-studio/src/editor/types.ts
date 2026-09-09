@@ -117,6 +117,7 @@ export type EditorController = {
   clearError: () => void;
   saveStatus: 'loading' | 'saving' | 'saved' | 'error';
   exportProject: () => void;
+  exportVideo: () => Promise<string | null>;
 };
 
 export function formatTime(seconds: number): string {

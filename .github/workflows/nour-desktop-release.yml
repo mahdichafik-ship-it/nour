@@ -129,6 +129,18 @@ jobs:
         working-directory: artifacts/nour-studio
         run: node scripts/generate-desktop-icons.mjs
 
+      - name: Prepare and smoke-check bundled FFmpeg sidecar
+        working-directory: artifacts/nour-studio
+        run: |
+          bash scripts/prepare-ffmpeg-sidecar.sh
+          sidecar="src-tauri/binaries/ffmpeg-${{ matrix.rust_target }}"
+          probe="src-tauri/binaries/ffprobe-${{ matrix.rust_target }}"
+          test -x "$sidecar"
+          test -x "$probe"
+          "$sidecar" -version | head -n 1
+          "$probe" -version | head -n 1
+          file "$sidecar" | grep -Eiq '${{ matrix.runner_architecture }}|Mach-O'
+
       - name: Build, sign, notarize, and bundle
         working-directory: artifacts/nour-studio
         env:

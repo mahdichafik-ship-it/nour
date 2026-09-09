@@ -114,7 +114,7 @@ working preview path, but no repository evidence establishes the required
 cross-format, long-file, image, audio-mix, and Intel/Apple Silicon acceptance
 matrix. It cannot substitute for rendered-output verification.
 
-### 5. Basic rendered color and audio — **Not implemented; not release-ready**
+### 5. Basic rendered color and audio — **Partial; desktop evidence pending**
 
 Required:
 
@@ -124,9 +124,9 @@ Required:
 * Verify that rendered pixels and audio differ as requested and remain
   synchronized.
 
-Evidence today: Inspector adjustments are explicitly labeled “Preview metadata
-only. Saved in project, not rendered.” Playback applies a CSS filter and
-volume controls, but there is no render pipeline or encoded output.
+Evidence today: the Tauri export command applies exposure/contrast/saturation
+and clip/track mute/volume through FFmpeg filters. Browser preview remains
+preview-only. Cross-architecture rendered-pixel/audio evidence is pending.
 
 ### 6. Static title and captions — **Partial; not release-ready**
 
@@ -142,7 +142,7 @@ undo/redo, and render at their timed position in timeline preview. There is no
 finished-video renderer yet, so overlays cannot be burned or muxed into an
 output and this requirement remains incomplete.
 
-### 7. Playable finished-video export — **Not implemented; not release-ready**
+### 7. Playable finished-video export — **Partial; not release-ready**
 
 Required:
 
@@ -153,9 +153,10 @@ Required:
 * Reopen the output in an independent player and verify duration, playback,
   picture, audio, and overlays.
 
-Evidence today: the only export in `EditorWorkspace` is `Export JSON`, and the
-engine creates a `.nour.json` project description. No video encoder or
-finished-video export exists.
+Evidence today: desktop `Export MP4` invokes the bundled FFmpeg sidecar, uses
+the native save dialog, validates the request, and atomically renames a partial
+file after successful H.264/AAC rendering. Browser mode clearly limits export
+to JSON. Independent-player and signed Mac acceptance evidence remain pending.
 
 ### 8. Signed/notarized Intel and Apple Silicon distribution — **Defined,
 release evidence pending**

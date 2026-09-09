@@ -319,6 +319,7 @@
 .new-project-btn:hover { border-color: var(--e-text-muted); }
 .export-btn { background: var(--e-accent); color: #101215; border-color: var(--e-accent); }
 .export-btn:hover { background: var(--e-accent-hover); }
+.desktop-export-note { flex-shrink: 0; padding: 7px 20px; color: var(--e-accent); background: #29231b; border-bottom: 1px solid #51432d; font-size: 11px; text-align: center; }
 .console-link {
   display: flex; align-items: center; gap: 6px;
   font-size: 12px;

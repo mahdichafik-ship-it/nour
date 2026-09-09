@@ -32,6 +32,15 @@ That single command starts:
 - Export Project writes a `.nourproject` file into the macOS app-data folder.
 - The desktop process uses the same `/api/healthz` contract as the web app.
 - Imported media remains local and previews directly from its local object URL.
+- Desktop Export MP4 renders H.264/AAC with the bundled, pinned FFmpeg sidecar;
+  the native save dialog writes a temporary `.partial` file and renames only
+  after FFmpeg succeeds. Browser mode intentionally offers project JSON only.
+
+The sidecar is prepared with `scripts/prepare-ffmpeg-sidecar.sh`. It downloads
+the pinned eugeneware/ffmpeg-static b6.1.1 arm64 and x64 macOS binaries,
+verifies their SHA256 digests, and names them for the exact Tauri target. A
+successful local smoke check still does not constitute signed/notarized Mac
+evidence; that evidence remains pending in the release workflow.
 
 The Replit browser Preview remains available for interface work, but it cannot
 replace testing the native window on macOS.

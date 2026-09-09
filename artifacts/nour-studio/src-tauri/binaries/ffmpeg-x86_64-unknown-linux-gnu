@@ -1,0 +1,4 @@
+#!/bin/sh
+# Development smoke wrapper. Release builds always replace this with the
+# verified macOS sidecar produced by prepare-ffmpeg-sidecar.sh.
+exec ffmpeg "$@"

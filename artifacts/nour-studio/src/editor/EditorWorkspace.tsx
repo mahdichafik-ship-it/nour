@@ -24,6 +24,7 @@ export default function EditorWorkspace() {
 
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false);
+  const [isRendering, setIsRendering] = useState(false);
 
   useEffect(() => {
     if (editor.saveStatus === 'saved' && !editor.hasProject) setIsProjectDialogOpen(true);
@@ -140,14 +141,18 @@ export default function EditorWorkspace() {
           <Link href="/console/" className="console-link"><ArrowUpRight size={14} /> Console</Link>
           <button 
             className="export-btn" 
-            onClick={editor.exportProject} 
+            onClick={async () => { setIsRendering(true); try { await editor.exportVideo(); } finally { setIsRendering(false); } }}
             data-testid="button-export"
-            disabled={editor.saveStatus === 'saving' || editor.saveStatus === 'loading'}
+            disabled={!isNative || isRendering || editor.saveStatus === 'saving' || editor.saveStatus === 'loading'}
           >
-            <FileDown size={14} /> Export JSON
+            <FileDown size={14} /> {isRendering ? 'Rendering MP4…' : 'Export MP4'}
+          </button>
+          <button className="new-project-btn" onClick={editor.exportProject} disabled={editor.saveStatus === 'saving' || editor.saveStatus === 'loading'}>
+            Export JSON
           </button>
         </div>
       </header>
+      {!isNative && <div className="desktop-export-note" role="status">Finished-video export is desktop-only. Export JSON saves project metadata in the browser.</div>}
 
       <div className="workspace-middle">
         <Library editor={editor} />

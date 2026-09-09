@@ -49,7 +49,9 @@ fn main() {
         let decoder = png::Decoder::new(file);
         let mut reader = decoder.read_info().expect("decode app icon header");
         let mut pixels = vec![0; reader.output_buffer_size()];
-        let info = reader.next_frame(&mut pixels).expect("decode app icon pixels");
+        let info = reader
+            .next_frame(&mut pixels)
+            .expect("decode app icon pixels");
         assert!(
             info.color_type == png::ColorType::Rgba
                 && info.bit_depth == png::BitDepth::Eight
@@ -60,7 +62,8 @@ fn main() {
     println!("cargo:rerun-if-changed=icons/icon.icns");
     let icns = fs::read("icons/icon.icns").expect("read macOS icon");
     assert!(
-        icns.len() >= 8 && &icns[..4] == b"icns"
+        icns.len() >= 8
+            && &icns[..4] == b"icns"
             && u32::from_be_bytes(icns[4..8].try_into().unwrap()) as usize == icns.len(),
         "icons/icon.icns must be a genuine ICNS container, not a renamed PNG"
     );
