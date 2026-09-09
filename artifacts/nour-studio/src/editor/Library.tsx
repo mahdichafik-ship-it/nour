@@ -107,6 +107,15 @@ export function Library({ editor }: { editor: EditorController }) {
         {filteredAssets.length === 0 && (
           <div className="empty-library">
             <p>Import video, audio or images to begin.</p>
+            {editor.assets.length === 0 && (
+              <button
+                className="sample-project-cta"
+                type="button"
+                onClick={() => editor.createSampleProject({ ...editor.projectSettings, type: 'documentary' })}
+              >
+                Open the working sample
+              </button>
+            )}
           </div>
         )}
       </div>

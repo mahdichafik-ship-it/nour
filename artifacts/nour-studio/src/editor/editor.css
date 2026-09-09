@@ -346,6 +346,19 @@
 .filter-chips button.active { background: var(--e-border); color: var(--e-text); }
 .library-grid { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .empty-library { padding: 20px; text-align: center; color: var(--e-text-muted); font-size: 12px; }
+.sample-project-cta {
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--e-accent);
+  border-radius: 6px;
+  color: #171918;
+  background: var(--e-accent);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.sample-project-cta:hover { background: var(--e-accent-hover); }
 
 .asset-card {
   display: flex;
