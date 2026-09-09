@@ -1,6 +1,6 @@
 {
   "productName": "Nour",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "identifier": "studio.nour.desktop",
   "build": {
     "beforeBuildCommand": "pnpm run build:desktop",
