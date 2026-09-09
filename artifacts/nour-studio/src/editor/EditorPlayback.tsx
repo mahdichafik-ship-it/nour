@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
-import type { EditorController, MediaAsset, TimelineClip } from './types';
+import type { EditorController, MediaAsset, TimelineClip, TextOverlay } from './types';
 import { shouldSeekMedia } from './playback-sync';
 
 function sync(el: HTMLMediaElement | null, time: number, active: boolean, shouldPlay: boolean, master: boolean, forceSeek: boolean, volume: number, muted: boolean, report: (s: string) => void, failed?: () => void) {
@@ -57,6 +57,7 @@ export function EditorPlayback({ editor }: { editor: EditorController }) {
   const activeVisual = editor.mode === 'timeline' ? timeline.find(({ c, a }) => a.kind !== 'audio' && editor.currentTime >= c.start && editor.currentTime < c.start + c.duration) : undefined;
   const activeVideoId = activeVisual?.a.kind === 'video' ? activeVisual.c.id : null;
   const sourceMediaClock = editor.mode === 'source' && (selected?.kind === 'video' || selected?.kind === 'audio');
+  const activeOverlays = editor.mode === 'timeline' ? editor.overlays.filter(o => editor.currentTime >= o.start && editor.currentTime < o.start + o.duration) : [];
   useEffect(() => {
     editor.setMediaClockActive(sourceMediaClock || !!activeVideoId);
     return () => editor.setMediaClockActive(false);
@@ -70,8 +71,13 @@ export function EditorPlayback({ editor }: { editor: EditorController }) {
       {editor.mode === 'timeline' && timeline.filter(({ a }) => a.kind === 'video').map(({ a, c }) => <Media key={c.id} asset={a} clip={c} editor={editor} visual master={c.id === activeVideoId} />)}
       {editor.mode === 'timeline' && activeVisual?.a.kind === 'image' && <Media key={activeVisual.c.id} asset={activeVisual.a} clip={activeVisual.c} editor={editor} visual />}
       {((editor.mode === 'source' && (!selected || selected.error)) || (editor.mode === 'timeline' && !activeVisual)) && <p>{editor.mode === 'timeline' ? 'No video at the playhead' : 'No media selected'}</p>}
+       {activeOverlays.map(overlay => <TextOverlayView key={overlay.id} overlay={overlay} />)}
     </div>
     {editor.mode === 'source' && selected?.kind === 'audio' && <Media key={selected.id} asset={selected} editor={editor} master />}
     {editor.mode === 'timeline' && timeline.filter(({ a }) => a.kind === 'audio').map(({ a, c }) => <Media key={c.id} asset={a} clip={c} editor={editor} />)}
   </div>;
+}
+
+function TextOverlayView({ overlay }: { overlay: TextOverlay }) {
+  return <div className={`text-overlay text-overlay-${overlay.position} text-overlay-${overlay.kind}`} aria-label={overlay.kind}>{overlay.text}</div>;
 }

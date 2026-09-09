@@ -1,4 +1,5 @@
 export type MediaKind = 'video' | 'audio' | 'image';
+export type StoryRole = 'a-roll' | 'b-roll' | 'audio' | 'image';
 export type Track = 'video' | 'audio';
 export type ProjectType = 'documentary' | 'wedding' | 'interview' | 'social' | 'custom';
 export type AspectRatio = '16:9' | '9:16' | '1:1' | '4:3';
@@ -32,6 +33,7 @@ export type MediaAsset = {
   demo?: boolean;
   error?: string;
   adjustments?: Adjustments;
+  role: StoryRole;
 };
 export type TimelineClip = {
   id: string;
@@ -43,6 +45,16 @@ export type TimelineClip = {
   volume: number;
   muted: boolean;
 };
+export type TextOverlayKind = 'title' | 'caption';
+export type TextOverlayPosition = 'top' | 'center' | 'bottom';
+export type TextOverlay = {
+  id: string;
+  kind: TextOverlayKind;
+  text: string;
+  start: number;
+  duration: number;
+  position: TextOverlayPosition;
+};
 export type NativeMediaFile = { path: string; name: string; size: number };
 export type EditorController = {
   projectName: string;
@@ -53,6 +65,7 @@ export type EditorController = {
   createSampleProject: (settings: ProjectSettings) => void;
   assets: MediaAsset[];
   clips: TimelineClip[];
+  overlays: TextOverlay[];
   selectedAssetId: string | null;
   selectedClipId: string | null;
   selectAsset: (id: string) => void;
@@ -86,6 +99,15 @@ export type EditorController = {
   removeAsset: (assetId: string) => void;
   updateAssetAdjustments: (assetId: string, adjustments: Partial<Adjustments>) => void;
   resetAssetAdjustments: (assetId: string) => void;
+  setAssetRole: (assetId: string, role: StoryRole) => void;
+  splitClipAtPlayhead: (clipId?: string) => void;
+  addOverlay: (kind: TextOverlayKind) => void;
+  updateOverlay: (id: string, changes: Partial<Pick<TextOverlay, 'kind' | 'text' | 'start' | 'duration' | 'position'>>) => void;
+  removeOverlay: (id: string) => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  undo: () => void;
+  redo: () => void;
   importFiles: (files: FileList | File[]) => Promise<void>;
   importNative: () => Promise<void>;
   importing: boolean;

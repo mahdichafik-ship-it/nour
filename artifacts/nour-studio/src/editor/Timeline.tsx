@@ -127,7 +127,7 @@ function ClipNode({ clip, editor }: { clip: TimelineClip, editor: EditorControll
 
   return (
     <div
-      className={`timeline-clip ${isSelected ? 'selected' : ''}`}
+      className={`timeline-clip role-${asset?.role ?? clip.track} ${isSelected ? 'selected' : ''}`}
       style={{
         left: clip.start * PIXELS_PER_SECOND,
         width: clip.duration * PIXELS_PER_SECOND,
@@ -152,6 +152,7 @@ function ClipNode({ clip, editor }: { clip: TimelineClip, editor: EditorControll
     >
       <div className="clip-content">
         <span className="clip-name" title={asset?.name}>{asset?.name || 'Unknown'}</span>
+        <span className="clip-role">{asset?.role?.toUpperCase()}</span>
         {clip.muted && <VolumeX size={10} className="clip-mute-icon" />}
       </div>
     </div>

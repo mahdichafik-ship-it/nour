@@ -1,6 +1,6 @@
 import React from 'react';
 import { Trash, RotateCcw } from 'lucide-react';
-import { EditorController, MediaAsset, TimelineClip, formatTime, Adjustments } from './types';
+import { EditorController, MediaAsset, TimelineClip, formatTime, Adjustments, StoryRole, TextOverlay, TextOverlayKind, TextOverlayPosition } from './types';
 
 export function Inspector({ editor }: { editor: EditorController }) {
   const handleDeleteAsset = (assetId: string) => {
@@ -29,6 +29,7 @@ export function Inspector({ editor }: { editor: EditorController }) {
             onDelete={() => handleDeleteAsset(editor.selectedAssetId!)}
             updateAdjustments={(changes) => editor.updateAssetAdjustments(editor.selectedAssetId!, changes)}
             resetAdjustments={() => editor.resetAssetAdjustments(editor.selectedAssetId!)}
+            setRole={(role) => editor.setAssetRole(editor.selectedAssetId!, role)}
           />
         ) : editor.mode === 'timeline' && editor.selectedClipId ? (
           <ClipProperties 
@@ -38,13 +39,42 @@ export function Inspector({ editor }: { editor: EditorController }) {
             onDelete={() => handleDeleteClip(editor.selectedClipId!)}
             updateAdjustments={(changes) => editor.updateAssetAdjustments(editor.clips.find(c => c.id === editor.selectedClipId)!.assetId, changes)}
             resetAdjustments={() => editor.resetAssetAdjustments(editor.clips.find(c => c.id === editor.selectedClipId)!.assetId)}
+            setRole={(role) => editor.setAssetRole(editor.clips.find(c => c.id === editor.selectedClipId)!.assetId, role)}
+            split={() => editor.splitClipAtPlayhead(editor.selectedClipId!)}
           />
         ) : (
           <div className="empty-inspector">Select an item to view properties.</div>
         )}
+        <OverlayProperties editor={editor} />
       </div>
     </aside>
   );
+}
+
+function OverlayProperties({ editor }: { editor: EditorController }) {
+  return <section className="overlay-properties">
+    <div className="overlay-heading"><h4>Text overlays</h4><div className="overlay-actions">
+      <button className="reset-btn" onClick={() => editor.addOverlay('title')}>+ Title</button>
+      <button className="reset-btn" onClick={() => editor.addOverlay('caption')}>+ Caption</button>
+    </div></div>
+    {editor.overlays.length === 0 && <p className="adjustment-note">Add a title or caption at the current playhead.</p>}
+    {editor.overlays.map(overlay => <OverlayRow key={overlay.id} overlay={overlay} update={(changes) => editor.updateOverlay(overlay.id, changes)} remove={() => editor.removeOverlay(overlay.id)} />)}
+  </section>;
+}
+
+function OverlayRow({ overlay, update, remove }: { overlay: TextOverlay, update: (changes: Partial<Pick<TextOverlay, 'kind' | 'text' | 'start' | 'duration' | 'position'>>) => void, remove: () => void }) {
+  return <div className="overlay-row">
+    <div className="overlay-row-title"><strong>{overlay.kind}</strong><button className="overlay-delete" onClick={remove}><Trash size={12} /></button></div>
+    <div className="prop-group"><label>Text</label><input value={overlay.text} onChange={e => update({ text: e.target.value })} /></div>
+    <div className="overlay-grid">
+      <div className="prop-group"><label>Start (s)</label><input type="number" min="0" step="0.1" value={overlay.start} onChange={e => update({ start: parseFloat(e.target.value) })} /></div>
+      <div className="prop-group"><label>Duration (s)</label><input type="number" min="0.1" step="0.1" value={overlay.duration} onChange={e => update({ duration: parseFloat(e.target.value) })} /></div>
+    </div>
+    <div className="overlay-grid">
+      <div className="prop-group"><label>Kind</label><select value={overlay.kind} onChange={e => update({ kind: e.target.value as TextOverlayKind })}><option value="title">Title</option><option value="caption">Caption</option></select></div>
+      <div className="prop-group"><label>Position</label><select value={overlay.position} onChange={e => update({ position: e.target.value as TextOverlayPosition })}><option value="top">Top</option><option value="center">Center</option><option value="bottom">Bottom</option></select></div>
+    </div>
+  </div>;
 }
 
 function ColorAdjustments({ asset, updateAdjustments, resetAdjustments }: { asset: MediaAsset, updateAdjustments: (changes: Partial<Adjustments>) => void, resetAdjustments: () => void }) {
@@ -84,13 +114,18 @@ function ColorAdjustments({ asset, updateAdjustments, resetAdjustments }: { asse
   );
 }
 
-function AssetProperties({ asset, onDelete, updateAdjustments, resetAdjustments }: { asset: MediaAsset, onDelete: () => void, updateAdjustments: (c: Partial<Adjustments>) => void, resetAdjustments: () => void }) {
+function RoleControl({ asset, setRole }: { asset: MediaAsset, setRole: (role: StoryRole) => void }) {
+  const roles: StoryRole[] = asset.kind === 'video' ? ['a-roll', 'b-roll'] : asset.kind === 'audio' ? ['audio'] : ['image'];
+  return <div className="prop-group"><label htmlFor="asset-role">Story role</label><select id="asset-role" value={asset.role} disabled={roles.length === 1} onChange={e => setRole(e.target.value as StoryRole)}>{roles.map(role => <option key={role} value={role}>{role.toUpperCase()}</option>)}</select></div>;
+}
+function AssetProperties({ asset, onDelete, updateAdjustments, resetAdjustments, setRole }: { asset: MediaAsset, onDelete: () => void, updateAdjustments: (c: Partial<Adjustments>) => void, resetAdjustments: () => void, setRole: (role: StoryRole) => void }) {
   if (!asset) return null;
   return (
     <div className="properties-form">
       <h4>{asset.name}</h4>
       <div className="prop-row"><span>Kind:</span> <span>{asset.kind}</span></div>
       <div className="prop-row"><span>Duration:</span> <span>{formatTime(asset.duration)}</span></div>
+      <RoleControl asset={asset} setRole={setRole} />
       {asset.width && <div className="prop-row"><span>Resolution:</span> <span>{asset.width}x{asset.height}</span></div>}
       
       <ColorAdjustments asset={asset} updateAdjustments={updateAdjustments} resetAdjustments={resetAdjustments} />
@@ -102,11 +137,13 @@ function AssetProperties({ asset, onDelete, updateAdjustments, resetAdjustments 
   );
 }
 
-function ClipProperties({ clip, asset, updateClip, onDelete, updateAdjustments, resetAdjustments }: { clip: TimelineClip, asset: MediaAsset, updateClip: (c: Partial<Pick<TimelineClip, 'start' | 'trimStart' | 'duration' | 'volume' | 'muted'>>) => void, onDelete: () => void, updateAdjustments: (c: Partial<Adjustments>) => void, resetAdjustments: () => void }) {
+function ClipProperties({ clip, asset, updateClip, onDelete, updateAdjustments, resetAdjustments, setRole, split }: { clip: TimelineClip, asset: MediaAsset, updateClip: (c: Partial<Pick<TimelineClip, 'start' | 'trimStart' | 'duration' | 'volume' | 'muted'>>) => void, onDelete: () => void, updateAdjustments: (c: Partial<Adjustments>) => void, resetAdjustments: () => void, setRole: (role: StoryRole) => void, split: () => void }) {
   if (!clip || !asset) return null;
   return (
     <div className="properties-form">
       <h4>{asset.name}</h4>
+      <RoleControl asset={asset} setRole={setRole} />
+      <button className="reset-btn" onClick={split}>Split at playhead</button>
       
       <div className="prop-group">
         <label htmlFor="clip-start">Start Position (s)</label>

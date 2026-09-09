@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_PROJECT_SETTINGS, type EditorController, type MediaAsset, type MediaKind, type NativeMediaFile, type ProjectSettings, type TimelineClip, type Track } from './types';
+import { DEFAULT_PROJECT_SETTINGS, type EditorController, type MediaAsset, type MediaKind, type NativeMediaFile, type ProjectSettings, type TimelineClip, type Track, type StoryRole, type TextOverlay, type TextOverlayKind } from './types';
 
-type StoredProject = { projectName: string; projectSettings?: ProjectSettings; assets: Omit<MediaAsset, 'src'>[]; clips: TimelineClip[]; trackMuted: Record<Track, boolean> };
+type StoredProject = { projectName: string; projectSettings?: ProjectSettings; assets: Omit<MediaAsset, 'src'>[]; clips: TimelineClip[]; overlays: TextOverlay[]; trackMuted: Record<Track, boolean> };
 const PROJECT_KEY = 'nour-editor-project-v1';
 const IMAGE_DURATION = 5;
 const extensions: Record<MediaKind, string[]> = {
@@ -24,10 +24,22 @@ const finite = (n: number, fallback = 0) => Number.isFinite(n) ? n : fallback;
 const normalizeProjectSettings = (value?: Partial<ProjectSettings>): ProjectSettings => ({ ...DEFAULT_PROJECT_SETTINGS, ...value });
 const DEMO_ASSET_ID = 'nour-demo-frame';
 const DEMO_ASSET_SRC = `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#182a2c"/><stop offset="0.52" stop-color="#295050"/><stop offset="1" stop-color="#d49a62"/></linearGradient><linearGradient id="sun" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f5d6a0"/><stop offset="1" stop-color="#d0744d"/></linearGradient></defs><rect width="1920" height="1080" fill="url(#bg)"/><circle cx="1510" cy="260" r="170" fill="url(#sun)" opacity=".92"/><path d="M0 790 360 470l260 230 300-360 420 450 240-220 340 330v180H0Z" fill="#102223" opacity=".9"/><path d="M0 875h1920" stroke="#f4d39c" stroke-width="4" opacity=".7"/><text x="120" y="150" fill="#fff4df" font-family="Arial,sans-serif" font-size="34" letter-spacing="8">NOUR / FIRST CUT</text><text x="120" y="955" fill="#fff4df" font-family="Arial,sans-serif" font-size="72" font-weight="700">A SIMPLE STORY</text><text x="124" y="1008" fill="#f4d39c" font-family="Arial,sans-serif" font-size="24" letter-spacing="4">SAMPLE PROJECT · READY TO EDIT</text></svg>`)}`;
-const demoAsset = (): MediaAsset => ({ id: DEMO_ASSET_ID, name: 'Nour sample frame.svg', kind: 'image', src: DEMO_ASSET_SRC, duration: 6, width: 1920, height: 1080, demo: true });
+const roleForKind = (kind: MediaKind): StoryRole => kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : 'a-roll';
+const demoAsset = (): MediaAsset => ({ id: DEMO_ASSET_ID, name: 'Nour sample frame.svg', kind: 'image', role: 'image', src: DEMO_ASSET_SRC, duration: 6, width: 1920, height: 1080, demo: true });
 export function hasTrackOverlap(clips: TimelineClip[], candidate: TimelineClip): boolean {
   const end = candidate.start + candidate.duration;
   return clips.some(clip => clip.id !== candidate.id && clip.track === candidate.track && candidate.start < clip.start + clip.duration && end > clip.start);
+}
+export function splitTimelineClip(clip: TimelineClip, playhead: number, newId: string): [TimelineClip, TimelineClip] | null {
+  const cut = playhead - clip.start;
+  if (cut <= 0.05 || cut >= clip.duration - 0.05) return null;
+  return [
+    { ...clip, duration: cut },
+    { ...clip, id: newId, start: playhead, trimStart: clip.trimStart + cut, duration: clip.duration - cut },
+  ];
+}
+export function isTextOverlayActive(overlay: TextOverlay, time: number): boolean {
+  return Number.isFinite(time) && time >= overlay.start && time < overlay.start + overlay.duration;
 }
 const db = () => new Promise<IDBDatabase>((resolve, reject) => {
   const request = indexedDB.open('nour-editor-media-v1', 1);
@@ -61,6 +73,7 @@ export function useEditorEngine(): EditorController {
   const [hasProject, setHasProject] = useState(false);
   const [assets, setAssets] = useState<MediaAsset[]>([]);
   const [clips, setClips] = useState<TimelineClip[]>([]);
+  const [overlays, setOverlays] = useState<TextOverlay[]>([]);
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
   const [mode, setModeState] = useState<'source' | 'timeline'>('source');
@@ -77,11 +90,29 @@ export function useEditorEngine(): EditorController {
   const [error, setError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<EditorController['saveStatus']>('loading');
   const ready = useRef(false), urls = useRef(new Set<string>()), importChain = useRef(Promise.resolve()), saveChain = useRef(Promise.resolve());
-  const latestProject = useRef<StoredProject>({ projectName: 'Untitled project', projectSettings: DEFAULT_PROJECT_SETTINGS, assets: [], clips: [], trackMuted: { video: false, audio: false } });
-  const assetsRef = useRef(assets), clipsRef = useRef(clips), modeRef = useRef(mode), selectedRef = useRef(selectedAssetId), timeRef = useRef(0);
+  type Snapshot = { projectName: string; projectSettings: ProjectSettings; hasProject: boolean; assets: MediaAsset[]; clips: TimelineClip[]; overlays: TextOverlay[]; trackMuted: Record<Track, boolean> };
+  const history = useRef<Snapshot[]>([]), future = useRef<Snapshot[]>([]);
+  const [, refreshHistory] = useState(0);
+  const latestProject = useRef<StoredProject>({ projectName: 'Untitled project', projectSettings: DEFAULT_PROJECT_SETTINGS, assets: [], clips: [], overlays: [], trackMuted: { video: false, audio: false } });
+  const assetsRef = useRef(assets), clipsRef = useRef(clips), overlaysRef = useRef(overlays), modeRef = useRef(mode), selectedRef = useRef(selectedAssetId), timeRef = useRef(0);
+  const projectNameRef = useRef(projectName), settingsRef = useRef(projectSettings), hasProjectRef = useRef(hasProject), trackMutedRef = useRef(trackMuted);
   useEffect(() => { assetsRef.current = assets; }, [assets]);
   useEffect(() => { clipsRef.current = clips; }, [clips]);
+  useEffect(() => { overlaysRef.current = overlays; }, [overlays]);
+  useEffect(() => { projectNameRef.current = projectName; }, [projectName]);
+  useEffect(() => { settingsRef.current = projectSettings; }, [projectSettings]);
+  useEffect(() => { hasProjectRef.current = hasProject; }, [hasProject]);
+  useEffect(() => { trackMutedRef.current = trackMuted; }, [trackMuted]);
   useEffect(() => { modeRef.current = mode; selectedRef.current = selectedAssetId; }, [mode, selectedAssetId]);
+  const snapshot = useCallback((): Snapshot => ({
+    projectName: projectNameRef.current, projectSettings: settingsRef.current, hasProject: hasProjectRef.current,
+    assets: assetsRef.current, clips: clipsRef.current, overlays: overlaysRef.current, trackMuted: trackMutedRef.current,
+  }), []);
+  const recordHistory = useCallback(() => {
+    history.current = [...history.current, snapshot()].slice(-100);
+    future.current = [];
+    refreshHistory(value => value + 1);
+  }, [snapshot]);
 
   const duration = useMemo(() => Math.max(0, ...clips.map(c => c.start + c.duration)), [clips]);
   const playbackDuration = mode === 'source' ? (assets.find(a => a.id === selectedAssetId)?.duration ?? 0) : duration;
@@ -127,7 +158,7 @@ export function useEditorEngine(): EditorController {
   }, [playing, playbackReady, mediaClockActive]);
   useEffect(() => { timeRef.current = currentTime; }, [currentTime]);
   useEffect(() => {
-    latestProject.current = { projectName, projectSettings, assets: assets.map(({ src, ...a }) => a), clips, trackMuted };
+    latestProject.current = { projectName, projectSettings, assets: assets.map(({ src, ...a }) => a), clips, overlays, trackMuted };
   }, [projectName, projectSettings, assets, clips, trackMuted]);
   useEffect(() => {
     if (native) return;
@@ -151,10 +182,10 @@ export function useEditorEngine(): EditorController {
           if (asset.nativePath) src = nativeWindow().__TAURI__?.core?.convertFileSrc?.(asset.nativePath) ?? '';
            else if (asset.demo) src = DEMO_ASSET_SRC;
            else { const blob = await blobGet(asset.id); if (blob) { src = URL.createObjectURL(blob); urls.current.add(src); } }
-          return { ...asset, src, error: src ? asset.error : 'Media file is unavailable locally.' };
+           return { ...asset, role: asset.role ?? roleForKind(asset.kind), src, error: src ? asset.error : 'Media file is unavailable locally.' };
         }));
         restoredSuccessfully = true;
-        if (!cancelled) { setProjectName(data.projectName || 'Untitled project'); setProjectSettings(normalizeProjectSettings(data.projectSettings)); setAssets(restored); assetsRef.current = restored; setClips(data.clips || []); clipsRef.current = data.clips || []; setTrackMuted(data.trackMuted || { video: false, audio: false }); setHasProject(true); setSaveStatus('saved'); }
+         if (!cancelled) { setProjectName(data.projectName || 'Untitled project'); projectNameRef.current = data.projectName || 'Untitled project'; setProjectSettings(normalizeProjectSettings(data.projectSettings)); settingsRef.current = normalizeProjectSettings(data.projectSettings); setAssets(restored); assetsRef.current = restored; setClips(data.clips || []); clipsRef.current = data.clips || []; setOverlays(data.overlays || []); overlaysRef.current = data.overlays || []; setTrackMuted(data.trackMuted || { video: false, audio: false }); trackMutedRef.current = data.trackMuted || { video: false, audio: false }; setHasProject(true); hasProjectRef.current = true; setSaveStatus('saved'); }
       } catch { if (!cancelled) { setError('Could not restore the saved project.'); setSaveStatus('error'); } }
       finally { if (!cancelled && restoredSuccessfully) ready.current = true; }
     })();
@@ -164,7 +195,7 @@ export function useEditorEngine(): EditorController {
   useEffect(() => {
     if (!ready.current) return;
     const timer = window.setTimeout(() => {
-      const data: StoredProject = { projectName, projectSettings, assets: assets.map(({ src, ...a }) => a), clips, trackMuted };
+       const data: StoredProject = { projectName, projectSettings, assets: assets.map(({ src, ...a }) => a), clips, overlays, trackMuted };
       saveChain.current = saveChain.current.then(async () => {
         setSaveStatus('saving');
         try { if (native) await tauri()?.invoke('save_editor_state', { contents: JSON.stringify(data) }); else localStorage.setItem(PROJECT_KEY, JSON.stringify(data)); setSaveStatus('saved'); }
@@ -172,7 +203,25 @@ export function useEditorEngine(): EditorController {
       });
     }, 200);
     return () => clearTimeout(timer);
-  }, [projectName, projectSettings, assets, clips, trackMuted, native, hasProject]);
+  }, [projectName, projectSettings, assets, clips, overlays, trackMuted, native, hasProject]);
+
+  const restoreSnapshot = useCallback((value: Snapshot) => {
+    assetsRef.current = value.assets; clipsRef.current = value.clips; overlaysRef.current = value.overlays; trackMutedRef.current = value.trackMuted;
+    projectNameRef.current = value.projectName; settingsRef.current = value.projectSettings;
+    hasProjectRef.current = value.hasProject;
+    setProjectName(value.projectName); setProjectSettings(value.projectSettings); setHasProject(value.hasProject);
+    setAssets(value.assets); setClips(value.clips); setOverlays(value.overlays); setTrackMuted(value.trackMuted);
+    durationRef.current = modeRef.current === 'timeline' ? Math.max(0, ...value.clips.map(c => c.start + c.duration)) : (value.assets.find(a => a.id === selectedRef.current)?.duration ?? 0);
+    setPlaying(false);
+  }, []);
+  const undo = useCallback(() => {
+    const previous = history.current.pop(); if (!previous) return;
+    future.current.push(snapshot()); restoreSnapshot(previous); refreshHistory(value => value + 1);
+  }, [restoreSnapshot, snapshot]);
+  const redo = useCallback(() => {
+    const next = future.current.pop(); if (!next) return;
+    history.current.push(snapshot()); restoreSnapshot(next); refreshHistory(value => value + 1);
+  }, [restoreSnapshot, snapshot]);
 
   const addToTimeline = useCallback((assetId: string, start?: number, track?: Track) => {
     if (!ready.current) return;
@@ -182,8 +231,9 @@ export function useEditorEngine(): EditorController {
     const end = Math.max(0, ...clipsRef.current.filter(c => c.track === target).map(c => c.start + c.duration));
     const clip: TimelineClip = { id: id(), assetId, track: target, start: Math.max(0, finite(start ?? end)), trimStart: 0, duration: asset.duration || IMAGE_DURATION, volume: 1, muted: false };
     if (hasTrackOverlap(clipsRef.current, clip)) { setError('That position overlaps another clip on this track. Choose a free space.'); return; }
+    recordHistory();
     const next = [...clipsRef.current, clip]; clipsRef.current = next; setClips(next); setPlaying(false); setCurrentTime(clip.start); setSelectedAssetId(null); selectedRef.current = null; setSelectedClipId(clip.id); modeRef.current = 'timeline'; durationRef.current = Math.max(0, ...next.map(c => c.start + c.duration)); setModeState('timeline');
-  }, []);
+  }, [recordHistory]);
   const moveClip = useCallback((clipId: string, start: number, track?: Track) => {
     if (!ready.current) return;
     const current = clipsRef.current.find(c => c.id === clipId), asset = current && assetsRef.current.find(a => a.id === current.assetId);
@@ -191,96 +241,145 @@ export function useEditorEngine(): EditorController {
     if ((asset.kind === 'audio') !== (target === 'audio')) { setError('Audio clips belong on the audio track; video and images belong on the video track.'); return; }
     const candidate = { ...current, start: Math.max(0, finite(start)), track: target };
     if (hasTrackOverlap(clipsRef.current, candidate)) { setError('That position overlaps another clip on this track. Choose a free space.'); return; }
+    recordHistory();
     const next = clipsRef.current.map(c => c.id === clipId ? candidate : c); clipsRef.current = next; setClips(next);
-  }, []);
+  }, [recordHistory]);
   const updateClip = useCallback((clipId: string, changes: Partial<Pick<TimelineClip, 'start' | 'trimStart' | 'duration' | 'volume' | 'muted'>>) => {
     if (!ready.current) return; const current = clipsRef.current.find(c => c.id === clipId); if (!current) return;
     const asset = assetsRef.current.find(a => a.id === current.assetId); const source = asset?.duration ?? current.duration + current.trimStart; const trimStart = Math.min(Math.max(0, finite(changes.trimStart ?? current.trimStart)), Math.max(0, source - .05)); const max = source - trimStart;
     const candidate = { ...current, ...changes, start: Math.max(0, finite(changes.start ?? current.start)), trimStart, duration: Math.min(max, Math.max(.05, finite(changes.duration ?? current.duration))), volume: Math.min(1, Math.max(0, finite(changes.volume ?? current.volume))) };
     if (hasTrackOverlap(clipsRef.current, candidate)) { setError('That edit overlaps another clip on this track. Choose a free space.'); return; }
+    recordHistory();
     const next = clipsRef.current.map(c => c.id === clipId ? candidate : c); clipsRef.current = next; setClips(next);
-  }, []);
-  const removeClip = useCallback((clipId: string) => { if (!ready.current) return; setClips(old => old.filter(c => c.id !== clipId)); if (selectedClipId === clipId) setSelectedClipId(null); }, [selectedClipId]);
+  }, [recordHistory]);
+  const removeClip = useCallback((clipId: string) => { if (!ready.current || !clipsRef.current.some(c => c.id === clipId)) return; recordHistory(); const next = clipsRef.current.filter(c => c.id !== clipId); clipsRef.current = next; setClips(next); if (selectedClipId === clipId) setSelectedClipId(null); }, [recordHistory, selectedClipId]);
   const removeAsset = useCallback((assetId: string) => {
     if (!ready.current) return;
-    const asset = assetsRef.current.find(a => a.id === assetId); setAssets(old => old.filter(a => a.id !== assetId)); setClips(old => old.filter(c => c.assetId !== assetId));
-    if (selectedAssetId === assetId) { selectedRef.current = null; pauseReset(); } if (asset?.src.startsWith('blob:')) { URL.revokeObjectURL(asset.src); urls.current.delete(asset.src); }
-  }, [pauseReset, selectedAssetId]);
+    const asset = assetsRef.current.find(a => a.id === assetId);
+    if (!asset) return;
+    recordHistory();
+    const nextAssets = assetsRef.current.filter(a => a.id !== assetId), nextClips = clipsRef.current.filter(c => c.assetId !== assetId);
+    assetsRef.current = nextAssets; clipsRef.current = nextClips; setAssets(nextAssets); setClips(nextClips);
+    if (selectedAssetId === assetId) { selectedRef.current = null; pauseReset(); }
+  }, [pauseReset, recordHistory, selectedAssetId]);
 
   const updateAssetAdjustments = useCallback((assetId: string, changes: Partial<{ exposure: number, contrast: number, saturation: number }>) => {
     if (!ready.current) return;
-    setAssets(old => old.map(a => a.id === assetId ? { ...a, adjustments: { exposure: 1, contrast: 1, saturation: 1, ...a.adjustments, ...changes } } : a));
-  }, []);
+    recordHistory(); const next = assetsRef.current.map(a => a.id === assetId ? { ...a, adjustments: { exposure: 1, contrast: 1, saturation: 1, ...a.adjustments, ...changes } } : a); assetsRef.current = next; setAssets(next);
+  }, [recordHistory]);
 
   const resetAssetAdjustments = useCallback((assetId: string) => {
     if (!ready.current) return;
-    setAssets(old => old.map(a => {
+    recordHistory(); const next = assetsRef.current.map(a => {
       if (a.id === assetId) {
         const { adjustments, ...rest } = a;
         return rest;
       }
       return a;
-    }));
-  }, []);
+    }); assetsRef.current = next; setAssets(next);
+  }, [recordHistory]);
+
+  const setAssetRole = useCallback((assetId: string, role: StoryRole) => {
+    if (!ready.current || !assetsRef.current.some(a => a.id === assetId)) return;
+    recordHistory(); const next = assetsRef.current.map(a => a.id === assetId ? { ...a, role } : a);
+    assetsRef.current = next; setAssets(next);
+  }, [recordHistory]);
+
+  const splitClipAtPlayhead = useCallback((clipId?: string) => {
+    if (!ready.current) return;
+    const clip = clipsRef.current.find(c => c.id === (clipId ?? selectedClipId));
+    if (!clip) { setError('Select a timeline clip before splitting.'); return; }
+    const split = splitTimelineClip(clip, currentTime, id());
+    if (!split) { setError('Move the playhead inside the selected clip before splitting.'); return; }
+    const [left, right] = split;
+    recordHistory();
+    const next = clipsRef.current.map(c => c.id === clip.id ? left : c).concat(right);
+    clipsRef.current = next; setClips(next); setSelectedClipId(right.id); setCurrentTime(right.start);
+  }, [currentTime, recordHistory, selectedClipId]);
+  const addOverlay = useCallback((kind: TextOverlayKind) => {
+    if (!ready.current) return;
+    recordHistory();
+    const overlay: TextOverlay = { id: id(), kind, text: kind === 'title' ? 'Title' : 'Caption', start: Math.max(0, currentTime), duration: 3, position: kind === 'title' ? 'top' : 'bottom' };
+    const next = [...overlaysRef.current, overlay]; overlaysRef.current = next; setOverlays(next);
+  }, [currentTime, recordHistory]);
+  const updateOverlay = useCallback((overlayId: string, changes: Partial<Pick<TextOverlay, 'kind' | 'text' | 'start' | 'duration' | 'position'>>) => {
+    if (!ready.current) return;
+    const current = overlaysRef.current.find(o => o.id === overlayId); if (!current) return;
+    const nextOverlay = { ...current, ...changes, text: String(changes.text ?? current.text), start: Math.max(0, finite(changes.start ?? current.start)), duration: Math.max(.1, finite(changes.duration ?? current.duration)) };
+    recordHistory(); const next = overlaysRef.current.map(o => o.id === overlayId ? nextOverlay : o); overlaysRef.current = next; setOverlays(next);
+  }, [recordHistory]);
+  const removeOverlay = useCallback((overlayId: string) => {
+    if (!ready.current || !overlaysRef.current.some(o => o.id === overlayId)) return;
+    recordHistory(); const next = overlaysRef.current.filter(o => o.id !== overlayId); overlaysRef.current = next; setOverlays(next);
+  }, [recordHistory]);
 
   const importFiles = useCallback(async (input: FileList | File[]) => {
     if (!ready.current) { setError('Wait for the project to finish loading before importing.'); return; }
     if (native) { setError('Use the desktop Import picker to add media in the native app.'); return; }
     const files = Array.from(input); importChain.current = importChain.current.then(async () => {
+      let recorded = false;
       setImporting(true); setError(null);
       for (const file of files) {
         const kind = fileKind(file.name, file.type); if (!kind) { setError(`Unsupported file: ${file.name}`); continue; }
         const assetId = id(), src = URL.createObjectURL(file); urls.current.add(src);
-        try { const meta = await probe(src, kind); await blobPut(assetId, file); const asset = { id: assetId, name: file.name, kind, src, size: file.size, ...meta }; setAssets(old => [...old, asset]); if (!selectedRef.current) { selectedRef.current = assetId; modeRef.current = 'source'; setSelectedAssetId(assetId); setSelectedClipId(null); setModeState('source'); setCurrentTime(0); } }
+         try { const meta = await probe(src, kind); await blobPut(assetId, file); const asset = { id: assetId, name: file.name, kind, role: roleForKind(kind), src, size: file.size, ...meta }; if (!recorded) { recordHistory(); recorded = true; } const next = [...assetsRef.current, asset]; assetsRef.current = next; setAssets(next); if (!selectedRef.current) { selectedRef.current = assetId; modeRef.current = 'source'; setSelectedAssetId(assetId); setSelectedClipId(null); setModeState('source'); setCurrentTime(0); } }
         catch (e) { URL.revokeObjectURL(src); urls.current.delete(src); setError(`${file.name}: ${(e as Error).message}`); }
       } setImporting(false);
     }); return importChain.current;
-  }, []);
+  }, [native, recordHistory]);
   const importNative = useCallback(async () => {
     if (!ready.current) { setError('Wait for the project to finish loading before importing.'); return; }
     if (!native || !tauri()) { setError('Native file import is only available in the desktop app.'); return; }
     setImporting(true); setError(null);
     try {
       const files = await tauri()!.invoke<NativeMediaFile[]>('import_media');
-      for (const file of files) { const kind = fileKind(file.name); if (!kind) { setError(`Unsupported file: ${file.name}`); continue; } const src = nativeWindow().__TAURI__?.core?.convertFileSrc?.(file.path) ?? ''; if (!src) { setError(`${file.name}: native media URL could not be created.`); continue; } try { const meta = await probe(src, kind); const assetId = id(); setAssets(old => [...old, { id: assetId, name: file.name, kind, src, nativePath: file.path, size: file.size, ...meta }]); if (!selectedRef.current) { selectedRef.current = assetId; modeRef.current = 'source'; setSelectedAssetId(assetId); setSelectedClipId(null); setModeState('source'); setCurrentTime(0); } } catch (e) { setError(`${file.name}: ${(e as Error).message}`); } }
+       let recorded = false;
+       for (const file of files) { const kind = fileKind(file.name); if (!kind) { setError(`Unsupported file: ${file.name}`); continue; } const src = nativeWindow().__TAURI__?.core?.convertFileSrc?.(file.path) ?? ''; if (!src) { setError(`${file.name}: native media URL could not be created.`); continue; } try { const meta = await probe(src, kind); const assetId = id(); const asset = { id: assetId, name: file.name, kind, role: roleForKind(kind), src, nativePath: file.path, size: file.size, ...meta }; if (!recorded) { recordHistory(); recorded = true; } const next = [...assetsRef.current, asset]; assetsRef.current = next; setAssets(next); if (!selectedRef.current) { selectedRef.current = assetId; modeRef.current = 'source'; setSelectedAssetId(assetId); setSelectedClipId(null); setModeState('source'); setCurrentTime(0); } } catch (e) { setError(`${file.name}: ${(e as Error).message}`); } }
     } catch (e) { setError(`Could not import media: ${(e as Error).message}`); }
     finally { setImporting(false); }
-  }, [native]);
+  }, [native, recordHistory]);
   const createProject = useCallback((name: string, settings: ProjectSettings) => {
+    recordHistory();
     ready.current = true;
     pauseReset();
-    assetsRef.current.forEach(a => { if (a.src.startsWith('blob:')) { URL.revokeObjectURL(a.src); urls.current.delete(a.src); } });
     assetsRef.current = [];
     clipsRef.current = [];
+    overlaysRef.current = [];
     selectedRef.current = null;
     modeRef.current = 'source';
-    setProjectName(name.trim() || 'Untitled project');
+    const nextName = name.trim() || 'Untitled project';
+    projectNameRef.current = nextName; settingsRef.current = settings; hasProjectRef.current = true; trackMutedRef.current = { video: false, audio: false };
+    setProjectName(nextName);
     setProjectSettings(settings);
     setHasProject(true);
     setAssets([]);
     setClips([]);
+    setOverlays([]);
     setSelectedAssetId(null);
     setSelectedClipId(null);
     setTrackMuted({ video: false, audio: false });
     setModeState('source');
     setSaveStatus('saving');
     setError(null);
-  }, [pauseReset]);
+  }, [pauseReset, recordHistory]);
   const createSampleProject = useCallback((settings: ProjectSettings) => {
+    recordHistory();
     const asset = demoAsset();
     const clip: TimelineClip = { id: 'nour-demo-clip', assetId: asset.id, track: 'video', start: 0, trimStart: 0, duration: asset.duration, volume: 1, muted: false };
     ready.current = true;
     pauseReset();
-    assetsRef.current.forEach(a => { if (a.src.startsWith('blob:')) { URL.revokeObjectURL(a.src); urls.current.delete(a.src); } });
     assetsRef.current = [asset];
     clipsRef.current = [clip];
+    overlaysRef.current = [];
     selectedRef.current = asset.id;
     modeRef.current = 'timeline';
+    projectNameRef.current = 'Nour first cut'; settingsRef.current = settings; hasProjectRef.current = true; trackMutedRef.current = { video: false, audio: false };
     setProjectName('Nour first cut');
     setProjectSettings(settings);
     setHasProject(true);
     setAssets([asset]);
     setClips([clip]);
+    setOverlays([]);
     setSelectedAssetId(asset.id);
     setSelectedClipId(clip.id);
     setTrackMuted({ video: false, audio: false });
@@ -288,8 +387,8 @@ export function useEditorEngine(): EditorController {
     durationRef.current = asset.duration;
     setSaveStatus('saving');
     setError(null);
-  }, [pauseReset]);
-  const exportProject = useCallback(() => { const data: StoredProject = { projectName, projectSettings, assets: assets.map(({ src, ...a }) => a), clips, trackMuted }; const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })); a.download = `${projectName || 'project'}.nour.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 0); }, [projectName, projectSettings, assets, clips, trackMuted]);
+  }, [pauseReset, recordHistory]);
+  const exportProject = useCallback(() => { const data: StoredProject = { projectName, projectSettings, assets: assets.map(({ src, ...a }) => a), clips, overlays, trackMuted }; const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })); a.download = `${projectName || 'project'}.nour.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 0); }, [projectName, projectSettings, assets, clips, overlays, trackMuted]);
 
-  return { projectName, setProjectName: name => { if (ready.current) setProjectName(name); }, projectSettings, hasProject, createProject, createSampleProject, assets, clips, selectedAssetId, selectedClipId, selectAsset, selectClip, mode, setMode, currentTime, seek, previewSeek, commitSeek, playing, togglePlay: () => { if (!ready.current) return; if (!playbackDuration) { reportError('Select supported media or add a clip before playing.'); return; } if (currentTime >= playbackDuration) { timeRef.current = 0; setCurrentTime(0); setSeekRevision(value => value + 1); } setPlaying(p => !p); }, playbackReady, buffering, setPlaybackReady, setMediaClockActive, syncPlaybackTime, seekRevision, duration, playbackDuration, volume, setVolume: v => setVolume(Math.min(1, Math.max(0, v))), muted, setMuted, trackMuted, toggleTrackMute: track => setTrackMuted(m => ({ ...m, [track]: !m[track] })), addToTimeline, moveClip, updateClip, removeClip, removeAsset, updateAssetAdjustments, resetAssetAdjustments, importFiles, importNative, importing, isNative: native, error, reportError, clearError: () => setError(null), saveStatus, exportProject };
+  return { projectName, setProjectName: name => { if (ready.current) { recordHistory(); projectNameRef.current = name; setProjectName(name); } }, projectSettings, hasProject, createProject, createSampleProject, assets, clips, overlays, selectedAssetId, selectedClipId, selectAsset, selectClip, mode, setMode, currentTime, seek, previewSeek, commitSeek, playing, togglePlay: () => { if (!ready.current) return; if (!playbackDuration) { reportError('Select supported media or add a clip before playing.'); return; } if (currentTime >= playbackDuration) { timeRef.current = 0; setCurrentTime(0); setSeekRevision(value => value + 1); } setPlaying(p => !p); }, playbackReady, buffering, setPlaybackReady, setMediaClockActive, syncPlaybackTime, seekRevision, duration, playbackDuration, volume, setVolume: v => setVolume(Math.min(1, Math.max(0, v))), muted, setMuted, trackMuted, toggleTrackMute: track => { recordHistory(); const next = { ...trackMutedRef.current, [track]: !trackMutedRef.current[track] }; trackMutedRef.current = next; setTrackMuted(next); }, addToTimeline, moveClip, updateClip, removeClip, removeAsset, updateAssetAdjustments, resetAssetAdjustments, setAssetRole, splitClipAtPlayhead, addOverlay, updateOverlay, removeOverlay, canUndo: history.current.length > 0, canRedo: future.current.length > 0, undo, redo, importFiles, importNative, importing, isNative: native, error, reportError, clearError: () => setError(null), saveStatus, exportProject };
 }

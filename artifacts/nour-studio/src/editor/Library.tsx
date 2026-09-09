@@ -2,13 +2,16 @@ import React, { useRef, useState } from 'react';
 import { Search, Plus, FileVideo, FileAudio, Image as ImageIcon } from 'lucide-react';
 import { EditorController, formatTime } from './types';
 
+type LibraryFilter = 'all' | 'video' | 'audio' | 'image' | 'a-roll' | 'b-roll';
+
 export function Library({ editor }: { editor: EditorController }) {
   const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<'all' | 'video' | 'audio' | 'image'>('all');
+  const [filter, setFilter] = useState<LibraryFilter>('all');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const filteredAssets = editor.assets.filter(a => {
-    if (filter !== 'all' && a.kind !== filter) return false;
+    if (filter !== 'all' && filter !== 'a-roll' && filter !== 'b-roll' && a.kind !== filter) return false;
+    if ((filter === 'a-roll' || filter === 'b-roll') && a.role !== filter) return false;
     if (search && !a.name.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
@@ -47,7 +50,8 @@ export function Library({ editor }: { editor: EditorController }) {
         </div>
         <div className="filter-chips">
           <button className={filter === 'all' ? 'active' : ''} onClick={() => setFilter('all')}>All</button>
-          <button className={filter === 'video' ? 'active' : ''} onClick={() => setFilter('video')}>Video</button>
+          <button className={filter === 'a-roll' ? 'active' : ''} onClick={() => setFilter('a-roll')}>A-roll</button>
+          <button className={filter === 'b-roll' ? 'active' : ''} onClick={() => setFilter('b-roll')}>B-roll</button>
           <button className={filter === 'audio' ? 'active' : ''} onClick={() => setFilter('audio')}>Audio</button>
           <button className={filter === 'image' ? 'active' : ''} onClick={() => setFilter('image')}>Images</button>
         </div>
@@ -85,7 +89,7 @@ export function Library({ editor }: { editor: EditorController }) {
               </div>
               <div className="asset-info">
                 <div className="asset-name" title={asset.name}>{asset.name}</div>
-                <div className="asset-meta">{formatTime(asset.duration)}</div>
+                <div className="asset-meta">{formatTime(asset.duration)} · <span className={`story-role role-${asset.role}`}>{asset.role}</span></div>
                 {asset.error && <div className="asset-error" title={asset.error}>Unsupported</div>}
               </div>
               {usedCount > 0 && <div className="usage-badge" title={`Used ${usedCount} times in timeline`}>On timeline: {usedCount}</div>}

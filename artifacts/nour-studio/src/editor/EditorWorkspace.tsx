@@ -1,7 +1,7 @@
 import React, { useEffect, useState, DragEvent } from 'react';
 import { Link } from 'wouter';
 import { useEditorEngine } from './use-editor-engine';
-import { Plus, ArrowUpRight, FileDown, AlertTriangle, PlusSquare } from 'lucide-react';
+import { Plus, ArrowUpRight, FileDown, AlertTriangle, PlusSquare, Undo2, Redo2 } from 'lucide-react';
 import { Library } from './Library';
 import { PlayerArea } from './PlayerArea';
 import { Inspector } from './Inspector';
@@ -28,6 +28,19 @@ export default function EditorWorkspace() {
   useEffect(() => {
     if (editor.saveStatus === 'saved' && !editor.hasProject) setIsProjectDialogOpen(true);
   }, [editor.hasProject, editor.saveStatus]);
+
+  useEffect(() => {
+    const handleHistoryShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'z') return;
+      event.preventDefault();
+      if (event.shiftKey) editor.redo();
+      else editor.undo();
+    };
+    window.addEventListener('keydown', handleHistoryShortcut);
+    return () => window.removeEventListener('keydown', handleHistoryShortcut);
+  }, [editor.redo, editor.undo]);
 
   const handleDragOver = (e: DragEvent) => {
     e.preventDefault();
@@ -119,6 +132,10 @@ export default function EditorWorkspace() {
           <span className="save-status">{editor.saveStatus}</span>
         </div>
         <div className="topbar-right">
+          <div className="history-controls" aria-label="Edit history">
+            <button onClick={editor.undo} disabled={!editor.canUndo} title="Undo (⌘Z)" aria-label="Undo"><Undo2 size={14} /></button>
+            <button onClick={editor.redo} disabled={!editor.canRedo} title="Redo (⇧⌘Z)" aria-label="Redo"><Redo2 size={14} /></button>
+          </div>
           <button className="new-project-btn" onClick={() => setIsProjectDialogOpen(true)}><Plus size={14} /> New project</button>
           <Link href="/console/" className="console-link"><ArrowUpRight size={14} /> Console</Link>
           <button 
